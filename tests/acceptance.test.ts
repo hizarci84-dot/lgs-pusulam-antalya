@@ -341,9 +341,11 @@ describe('LGS Pusulam – Antalya • 18 Kabul Kriteri Doğrulama Testleri', () 
     const compEmpty = compareSchoolWithStudent(yusufZiya, emptyEstimate);
     expect(compEmpty.category).toBe('veri_yetersiz');
 
-    // Different programs of same school (Kepez Mahmut Celalettin Ökten AİHL Hazırlıklı vs 4 Yıl) are kept as separate records
-    const mcoPrograms = ANTALYA_SCHOOL_PROGRAMS.filter((s) =>
-      s.schoolName.includes('Mahmut Celalettin Ökten')
+    // Different programs of same school (Kepez Mahmut/Mahmud Celalettin/Celaleddin Ökten AİHL Hazırlıklı vs 4 Yıl) are kept as separate records
+    const mcoPrograms = ANTALYA_SCHOOL_PROGRAMS.filter(
+      (s) =>
+        s.schoolName.includes('Mahmut Celalettin Ökten') ||
+        s.schoolName.includes('Mahmud Celaleddin Ökten')
     );
     expect(mcoPrograms.length).toBe(2);
 
