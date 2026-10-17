@@ -798,11 +798,14 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                       </label>
                       <input
                         type="number"
+                        inputMode="numeric"
                         min={0}
                         max={20}
-                        value={topicEditCorrect}
+                        value={topicEditCorrect === '0' || topicEditCorrect === '' ? '' : topicEditCorrect}
+                        placeholder="0"
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) => setTopicEditCorrect(e.target.value)}
-                        className="w-full border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1.5 bg-white text-center font-bold text-emerald-800"
                       />
                     </div>
 
@@ -813,21 +816,25 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                       <div className="flex gap-1">
                         <input
                           type="number"
+                          inputMode="numeric"
                           min={0}
                           max={20}
-                          value={topicEditWrong}
+                          value={topicEditWrong === '0' || topicEditWrong === '' ? '' : topicEditWrong}
+                          placeholder="0"
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) => setTopicEditWrong(e.target.value)}
-                          placeholder="Y"
-                          className="w-1/2 border border-slate-300 rounded-lg px-1.5 py-1.5 bg-white"
+                          className="w-1/2 border border-slate-300 rounded-lg px-1.5 py-1.5 bg-white text-center font-bold text-rose-700"
                         />
                         <input
                           type="number"
+                          inputMode="numeric"
                           min={0}
                           max={20}
-                          value={topicEditBlank}
+                          value={topicEditBlank === '0' || topicEditBlank === '' ? '' : topicEditBlank}
+                          placeholder="0"
+                          onFocus={(e) => e.target.select()}
                           onChange={(e) => setTopicEditBlank(e.target.value)}
-                          placeholder="B"
-                          className="w-1/2 border border-slate-300 rounded-lg px-1.5 py-1.5 bg-white"
+                          className="w-1/2 border border-slate-300 rounded-lg px-1.5 py-1.5 bg-white text-center font-bold text-amber-800"
                         />
                       </div>
                     </div>
@@ -1189,9 +1196,11 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    inputMode="decimal"
                     min="100"
                     max="500"
                     value={providerScore}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setProviderScore(e.target.value)}
                     placeholder={`Otomatik: ${autoLgsCalc.score.toFixed(2)}`}
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-2 font-semibold text-navy-900"
@@ -1216,9 +1225,11 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                   <input
                     type="number"
                     step="0.01"
+                    inputMode="decimal"
                     min="0.01"
                     max="99.99"
                     value={providerPercentile}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setProviderPercentile(e.target.value)}
                     placeholder={`Otomatik: %${autoLgsCalc.percentile.toFixed(2)}`}
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-2 font-semibold text-navy-900"
@@ -1231,8 +1242,10 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                   </label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     value={participantCount}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setParticipantCount(e.target.value)}
                     placeholder="Örn: 65000"
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-2"
@@ -1245,8 +1258,10 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                   </label>
                   <input
                     type="number"
+                    inputMode="numeric"
                     min="1"
                     value={rankInExam}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setRankInExam(e.target.value)}
                     placeholder="Örn: 1240"
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-2"
@@ -1325,9 +1340,12 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                           <td className="py-2 px-1">
                             <input
                               type="number"
+                              inputMode="numeric"
                               min={0}
                               max={100}
-                              value={row.questionCount}
+                              value={row.questionCount === 0 ? '' : row.questionCount}
+                              placeholder="20"
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) =>
                                 updateSubjectRow(
                                   row.subjectId,
@@ -1335,15 +1353,18 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-full text-center border border-slate-300 rounded-lg py-1 bg-white"
+                              className="w-full text-center border border-slate-300 rounded-lg py-1.5 bg-white font-medium text-xs focus:ring-2 focus:ring-turquoise-400"
                             />
                           </td>
                           <td className="py-2 px-1">
                             <input
                               type="number"
+                              inputMode="numeric"
                               min={0}
                               max={row.questionCount}
-                              value={row.correct}
+                              value={row.correct === 0 ? '' : row.correct}
+                              placeholder="0"
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) =>
                                 updateSubjectRow(
                                   row.subjectId,
@@ -1351,15 +1372,18 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-full text-center border border-emerald-300 rounded-lg py-1 bg-white font-bold text-emerald-800"
+                              className="w-full text-center border border-emerald-300 rounded-lg py-1.5 bg-white font-bold text-emerald-800 text-sm focus:ring-2 focus:ring-emerald-400 shadow-2xs"
                             />
                           </td>
                           <td className="py-2 px-1">
                             <input
                               type="number"
+                              inputMode="numeric"
                               min={0}
                               max={row.questionCount}
-                              value={row.wrong}
+                              value={row.wrong === 0 ? '' : row.wrong}
+                              placeholder="0"
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) =>
                                 updateSubjectRow(
                                   row.subjectId,
@@ -1367,15 +1391,18 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-full text-center border border-rose-300 rounded-lg py-1 bg-white font-bold text-rose-700"
+                              className="w-full text-center border border-rose-300 rounded-lg py-1.5 bg-white font-bold text-rose-700 text-sm focus:ring-2 focus:ring-rose-400 shadow-2xs"
                             />
                           </td>
                           <td className="py-2 px-1">
                             <input
                               type="number"
+                              inputMode="numeric"
                               min={0}
                               max={row.questionCount}
-                              value={row.blank}
+                              value={row.blank === 0 ? '' : row.blank}
+                              placeholder="0"
+                              onFocus={(e) => e.target.select()}
                               onChange={(e) =>
                                 updateSubjectRow(
                                   row.subjectId,
@@ -1383,10 +1410,10 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-full text-center border border-amber-300 rounded-lg py-1 bg-white font-bold text-amber-800"
+                              className="w-full text-center border border-amber-300 rounded-lg py-1.5 bg-white font-bold text-amber-800 text-sm focus:ring-2 focus:ring-amber-400 shadow-2xs"
                             />
                           </td>
-                          <td className="py-2 text-right font-extrabold text-navy-900">
+                          <td className="py-2 text-right font-extrabold text-navy-900 text-xs">
                             {row.net.toFixed(2)}
                           </td>
                         </tr>

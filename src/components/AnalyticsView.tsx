@@ -34,6 +34,7 @@ import {
   WeeklyStudyPlan,
 } from '../types/models';
 import {
+  ErrorReasonDistributionChart,
   NetTrendChart,
   PercentileHistogramChart,
   SubjectBreakdownBarChart,
@@ -69,11 +70,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   onOpenQuestionModal,
 }) => {
   const [activeSection, setActiveSection] = useState<
-    'patterns' | 'study_plan' | 'subject_trends' | 'export_reports'
-  >('patterns');
+    'charts' | 'patterns' | 'study_plan' | 'export_reports'
+  >('charts');
   const [selectedSubjectForHistory, setSelectedSubjectForHistory] =
     useState<SubjectId>('matematik');
-  const [trendWindow, setTrendWindow] = useState<5 | 10>(10);
+  const [trendWindow, setTrendWindow] = useState<5 | 10 | 'all'>(10);
 
   const sortedExams = [...exams].sort((a, b) => b.date.localeCompare(a.date));
   const latestExam = sortedExams[0] || null;
@@ -157,20 +158,20 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         {(
           [
             {
+              id: 'charts',
+              label: '1. 📊 Mobil Grafikler & Gelişim',
+            },
+            {
               id: 'patterns',
-              label: '1. Tekrarlayan Hata & Konu Eksikliği Motoru',
+              label: '2. 🎯 Tekrarlayan Hata & Konu Eksikleri',
             },
             {
               id: 'study_plan',
-              label: '2. Kişiselleştirilmiş Haftalık Çalışma Planı',
-            },
-            {
-              id: 'subject_trends',
-              label: '3. Yüzdelik Dilim Histogramı, Ders Grafikleri & Net Değişimi',
+              label: '3. 📅 Haftalık Çalışma Planı',
             },
             {
               id: 'export_reports',
-              label: '4. Tekrar Başarısı, Çözülemeyenler & Rapor İndir',
+              label: '4. 📥 Rapor & Çözülemeyenler',
             },
           ] as const
         ).map((tab) => (
@@ -189,7 +190,145 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         ))}
       </div>
 
-      {/* SECTION 1: TEKRARLAYAN HATA VE KONU EKSİKLİĞİ MOTORU (Section 10) */}
+      {/* SECTION 1: MOBİL UYUMLU GRAFİKLER VE GELİŞİM ANALİZİ */}
+      {activeSection === 'charts' && (
+        <div className="space-y-4">
+          {/* 1. Net, Puan ve Yüzdelik Dilim Gelişim Trendi */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="font-extrabold text-sm text-navy-900 flex items-center gap-1.5">
+                  <TrendingUp className="w-4 h-4 text-turquoise-600" />
+                  Net, 2026 Puan ve Yüzdelik Dilim Gelişim Çizgisi
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Denemeler arası performans ilerleyişiniz (Çizgi üzerindeki noktalara dokunarak sınav detaylarını görebilirsiniz)
+                </p>
+              </div>
+              <div className="flex gap-1 bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                <button
+                  type="button"
+                  onClick={() => setTrendWindow(5)}
+                  className={`px-2.5 py-1 rounded-lg transition ${
+                    trendWindow === 5
+                      ? 'bg-navy-900 text-white shadow-xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Son 5
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrendWindow(10)}
+                  className={`px-2.5 py-1 rounded-lg transition ${
+                    trendWindow === 10
+                      ? 'bg-navy-900 text-white shadow-xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Son 10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrendWindow('all')}
+                  className={`px-2.5 py-1 rounded-lg transition ${
+                    trendWindow === 'all'
+                      ? 'bg-navy-900 text-white shadow-xs'
+                      : 'text-slate-600'
+                  }`}
+                >
+                  Tümü
+                </button>
+              </div>
+            </div>
+            <NetTrendChart exams={exams} limit={trendWindow} />
+          </div>
+
+          {/* 2. Yüzdelik Dilim Histogramı (Antalya Liseleri Yerleşim Bantları) */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div>
+              <h3 className="font-extrabold text-sm text-navy-900 flex items-center gap-1.5">
+                <BarChart3 className="w-4 h-4 text-purple-600" />
+                Yüzdelik Dilim Histogramı (Antalya Liseleri Eşiklerine Göre Dağılım)
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Tüm deneme sonuçlarınızın Yusuf Ziya Öner Fen, Antalya Anadolu, Adem-Tolunay ve diğer liselerin taban yüzdelik dilim aralıklarındaki frekans dağılımı
+              </p>
+            </div>
+            <PercentileHistogramChart exams={exams} student={student} />
+          </div>
+
+          {/* 3. Ders Bazında Doğru, Yanlış ve Boş Dağılım Çubuk Grafikleri */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div>
+              <h3 className="font-extrabold text-sm text-navy-900 flex items-center gap-1.5">
+                <BarChart3 className="w-4 h-4 text-emerald-600" />
+                Ders Bazında Doğru, Yanlış ve Boş Dağılım Grafikleri
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Tüm denemelerin ortalamasını veya tek tek deneme karnelerini renkli çubuklarla inceleyin
+              </p>
+            </div>
+            <SubjectBreakdownBarChart exams={exams} />
+          </div>
+
+          {/* 4. Hata Nedenleri Dağılım Grafiği (Dikkat, İşlem, Konu Eksikliği) */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div>
+              <h3 className="font-extrabold text-sm text-navy-900 flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                Hata Nedenleri Dağılım Grafiği (Puan Kayıp Kaynakları)
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Yanlış ve boş sorularınızın nedenlerine göre dağılımı (Dikkat, formül unutma, işlem hatası vb.)
+              </p>
+            </div>
+            <ErrorReasonDistributionChart questions={questions} />
+          </div>
+
+          {/* 5. Ders Bazında Net Değişimi Geçmiş Çizgi Grafiği & Son Deneme Karnesi */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-extrabold text-sm text-navy-900">
+                  Ders Bazında Net Değişimi
+                </h3>
+                <select
+                  value={selectedSubjectForHistory}
+                  onChange={(e) =>
+                    setSelectedSubjectForHistory(e.target.value as SubjectId)
+                  }
+                  className="border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-navy-900 bg-white outline-none focus:ring-2 focus:ring-turquoise-500"
+                >
+                  {LGS_SUBJECTS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <SubjectHistoryComparisonChart
+                exams={exams}
+                selectedSubjectId={selectedSubjectForHistory}
+              />
+            </div>
+
+            {latestExam && (
+              <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+                <h3 className="font-extrabold text-sm text-navy-900">
+                  Son Deneme Karnesi ({latestExam.name})
+                </h3>
+                <SubjectNetBars
+                  exam={latestExam}
+                  previousExam={previousExam}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SECTION 2: TEKRARLAYAN HATA VE KONU EKSİKLİĞİ MOTORU (Section 10) */}
       {activeSection === 'patterns' && (
         <div className="space-y-4">
           {!patternReport.hasData || patternReport.topicMetrics.length === 0 ? (
@@ -548,110 +687,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
       )}
 
-      {/* SECTION 3: YÜZDELİK DİLİM HİSTOGRAMI, DERS BAZLI GRAFİKLER VE NET DEĞİŞİMİ */}
-      {activeSection === 'subject_trends' && (
-        <div className="space-y-4">
-          {/* 1. Yüzdelik Dilim Histogramı */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
-            <div>
-              <h3 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                <BarChart3 className="w-4 h-4 text-turquoise-600" />
-                Deneme Sınavları Yüzdelik Dilim Histogramı
-              </h3>
-              <p className="text-[11px] text-slate-500">
-                Tüm deneme sonuçlarınızın MEB liselerine göre yüzdelik dilim aralıklarındaki frekans dağılımı
-              </p>
-            </div>
-            <PercentileHistogramChart exams={exams} student={student} />
-          </div>
 
-          {/* 2. Ders Bazında Doğru, Yanlış ve Boş Grafikleri */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
-            <div>
-              <h3 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                <BarChart3 className="w-4 h-4 text-emerald-600" />
-                Ders Bazında Doğru, Yanlış ve Boş Dağılım Grafikleri
-              </h3>
-              <p className="text-[11px] text-slate-500">
-                Tüm denemelerin ortalamasını veya tekil deneme karnesini inceleyin
-              </p>
-            </div>
-            <SubjectBreakdownBarChart exams={exams} />
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-sm text-navy-900">
-                Son 5 ve Son 10 Deneme Toplam Net Karşılaştırması
-              </h3>
-              <div className="flex gap-1 bg-slate-100 p-1 rounded-lg text-xs">
-                <button
-                  type="button"
-                  onClick={() => setTrendWindow(5)}
-                  className={`px-3 py-1 rounded font-bold ${
-                    trendWindow === 5
-                      ? 'bg-navy-900 text-white'
-                      : 'text-slate-600'
-                  }`}
-                >
-                  Son 5 Deneme
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTrendWindow(10)}
-                  className={`px-3 py-1 rounded font-bold ${
-                    trendWindow === 10
-                      ? 'bg-navy-900 text-white'
-                      : 'text-slate-600'
-                  }`}
-                >
-                  Son 10 Deneme
-                </button>
-              </div>
-            </div>
-            <NetTrendChart exams={exams} limit={trendWindow} />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-bold text-sm text-navy-900">
-                  Ders Bazında Net Değişimi
-                </h3>
-                <select
-                  value={selectedSubjectForHistory}
-                  onChange={(e) =>
-                    setSelectedSubjectForHistory(e.target.value as SubjectId)
-                  }
-                  className="border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-bold text-navy-900 bg-white"
-                >
-                  {LGS_SUBJECTS.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <SubjectHistoryComparisonChart
-                exams={exams}
-                selectedSubjectId={selectedSubjectForHistory}
-              />
-            </div>
-
-            {latestExam && (
-              <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
-                <h3 className="font-bold text-sm text-navy-900">
-                  Son Deneme Analizi ({latestExam.name})
-                </h3>
-                <SubjectNetBars
-                  exam={latestExam}
-                  previousExam={previousExam}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* SECTION 4: TEKRAR ÇÖZÜM BAŞARI RAPORU, ÇÖZÜLEMEYEN SORULAR & DIŞA AKTARMA */}
       {activeSection === 'export_reports' && (
