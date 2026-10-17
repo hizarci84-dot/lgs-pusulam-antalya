@@ -35,6 +35,8 @@ import {
 } from '../types/models';
 import {
   NetTrendChart,
+  PercentileHistogramChart,
+  SubjectBreakdownBarChart,
   SubjectHistoryComparisonChart,
   SubjectNetBars,
 } from './Charts';
@@ -164,7 +166,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             },
             {
               id: 'subject_trends',
-              label: '3. Son 5/10 Deneme & Ders Bazlı Net Değişimi',
+              label: '3. Yüzdelik Dilim Histogramı, Ders Grafikleri & Net Değişimi',
             },
             {
               id: 'export_reports',
@@ -546,9 +548,37 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
       )}
 
-      {/* SECTION 3: SON 5 VE 10 DENEME KARŞILAŞTIRMASI VE DERS BAZINDA NET DEĞİŞİMİ */}
+      {/* SECTION 3: YÜZDELİK DİLİM HİSTOGRAMI, DERS BAZLI GRAFİKLER VE NET DEĞİŞİMİ */}
       {activeSection === 'subject_trends' && (
         <div className="space-y-4">
+          {/* 1. Yüzdelik Dilim Histogramı */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div>
+              <h3 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
+                <BarChart3 className="w-4 h-4 text-turquoise-600" />
+                Deneme Sınavları Yüzdelik Dilim Histogramı
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Tüm deneme sonuçlarınızın MEB liselerine göre yüzdelik dilim aralıklarındaki frekans dağılımı
+              </p>
+            </div>
+            <PercentileHistogramChart exams={exams} student={student} />
+          </div>
+
+          {/* 2. Ders Bazında Doğru, Yanlış ve Boş Grafikleri */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div>
+              <h3 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
+                <BarChart3 className="w-4 h-4 text-emerald-600" />
+                Ders Bazında Doğru, Yanlış ve Boş Dağılım Grafikleri
+              </h3>
+              <p className="text-[11px] text-slate-500">
+                Tüm denemelerin ortalamasını veya tekil deneme karnesini inceleyin
+              </p>
+            </div>
+            <SubjectBreakdownBarChart exams={exams} />
+          </div>
+
           <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-sm text-navy-900">

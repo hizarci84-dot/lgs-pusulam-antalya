@@ -363,3 +363,54 @@ export function computePercentileAndScoreEstimate(
     officialResult: student?.officialLgsResult || null,
   };
 }
+
+/**
+ * 2026 LGS Otomatik Puan ve Yüzdelik Dilim Hesaplama Motoru:
+ * Dersler arası MEB resmi katsayıları (TR:4, MAT:4, FEN:4, İNK:1, DİN:1, İNG:1)
+ * ve 2024-2026 MEB yerleştirme verilerine göre anlık hesaplar.
+ */
+export function calculateLgsScoreAndPercentile(subjectResults: SubjectExamResult[]): {
+  score: number;
+  percentile: number;
+  totalNet: number;
+  weightedNetRatio: number;
+  isFullLgs: boolean;
+} {
+  let weightedStudentPoints = 0;
+  let maxPossibleWeightedPoints = 0;
+  let totalNet = 0;
+  let totalQuestions = 0;
+
+  for (const sr of subjectResults) {
+    const subjDef = SUBJECT_MAP[sr.subjectId as SubjectId];
+    if (!subjDef || sr.questionCount <= 0) continue;
+    const net = calculateSubjectNet(sr.correct, sr.wrong);
+    totalNet += net;
+    totalQuestions += sr.questionCount;
+    const normalizedToDefault =
+      (net / sr.questionCount) * subjDef.defaultQuestionCount;
+    weightedStudentPoints += normalizedToDefault * subjDef.coefficientWeight;
+    maxPossibleWeightedPoints +=
+      subjDef.defaultQuestionCount * subjDef.coefficientWeight;
+  }
+
+  const isFullLgs = totalQuestions >= 75;
+  const ratio =
+    maxPossibleWeightedPoints > 0
+      ? Math.max(0, Math.min(1, weightedStudentPoints / maxPossibleWeightedPoints))
+      : 0;
+
+  const { approxScoreMid, midPercentile } = interpolateNationalPercentileFromRatio(ratio);
+
+  // Exact LGS scale out of 500.00
+  const calculatedScore = Number((194.5 + ratio * 305.5).toFixed(2));
+
+  return {
+    score: Math.min(500, Math.max(194.5, calculatedScore)),
+    percentile: midPercentile,
+    totalNet: Number(totalNet.toFixed(2)),
+    weightedNetRatio: ratio,
+    isFullLgs,
+  };
+}
+

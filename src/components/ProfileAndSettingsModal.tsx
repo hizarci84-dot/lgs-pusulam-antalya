@@ -26,7 +26,6 @@ interface ProfileAndSettingsModalProps {
   onSaveStudent: (profile: StudentProfile) => Promise<void>;
   onSwitchStudent: (studentId: string) => Promise<void>;
   onDeleteStudent: (studentId: string) => Promise<void>;
-  onLoadDemoData: () => Promise<void>;
   onExportBackup: () => Promise<void>;
   onRestoreBackup: (payload: FullBackupPayload) => Promise<void>;
   onClearAllData: () => Promise<void>;
@@ -51,7 +50,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onSaveStudent,
   onSwitchStudent,
   onDeleteStudent,
-  onLoadDemoData,
   onExportBackup,
   onRestoreBackup,
   onClearAllData,
@@ -299,7 +297,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   : 'border-transparent text-slate-600'
               }`}
             >
-              Yedekleme & Demo Veri
+              Yedekleme & Bulut Eşitleme
             </button>
             <button
               type="button"
@@ -319,25 +317,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
           {statusBanner && (
             <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-3 py-2 rounded-xl text-xs font-semibold">
               {statusBanner}
-            </div>
-          )}
-
-          {isFirstSetup && (
-            <div className="bg-turquoise-50 border border-turquoise-300 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-              <div className="text-xs text-navy-900">
-                <strong>Hızlı Keşif (İsteğe Bağlı):</strong> Uygulamanın tüm grafiklerini, tekrarlayan hata analizini ve fotoğraf arşivini hemen görmek isterseniz örnek <strong>DEMO VERİSİ</strong> yükleyebilirsiniz.
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  await onLoadDemoData();
-                  if (onClose) onClose();
-                }}
-                className="shrink-0 px-3.5 py-2 bg-turquoise-600 hover:bg-turquoise-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs"
-              >
-                <Sparkles className="w-4 h-4" />
-                DEMO VERİSİ ile Keşfet
-              </button>
             </div>
           )}
 
@@ -384,11 +363,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                           <span>
                             {stu.nickname || `Öğrenci #${idx + 1}`} ({stu.antalyaDistrict})
                           </span>
-                          {stu.isDemo && (
-                            <span className="bg-amber-400 text-navy-950 text-[10px] px-1.5 py-0.5 rounded font-bold">
-                              DEMO
-                            </span>
-                          )}
                         </div>
                       );
                     })}
@@ -796,25 +770,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                     />
                   </label>
                 </div>
-              </div>
-
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2.5">
-                <h4 className="font-bold text-sm text-navy-900">
-                  Örnek Demo Verisi (DEMO VERİSİ Etiketli)
-                </h4>
-                <p className="text-slate-700">
-                  4 örnek deneme sınavı, tekrarlayan konu eksikleri (Çarpanlar ve Katlar, Basınç), örnek soru görselleri ve çalışma planı içeren demo profilini yükleyebilirsiniz. Demo kayıtları gerçek öğrenci verileriyle karışmaz ve açıkça "DEMO VERİSİ" olarak işaretlenir.
-                </p>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    await onLoadDemoData();
-                    setStatusBanner('Örnek DEMO VERİSİ başarıyla yüklendi.');
-                  }}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-navy-950 font-bold rounded-xl"
-                >
-                  Örnek DEMO VERİSİ Yükle
-                </button>
               </div>
 
               <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 space-y-2.5">

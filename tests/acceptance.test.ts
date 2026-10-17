@@ -383,4 +383,49 @@ describe('LGS Pusulam – Antalya • 18 Kabul Kriteri Doğrulama Testleri', () 
       backup.photoAssets.length
     );
   });
+
+  it('16. 2026 LGS Otomatik Puan ve Yüzdelik Dilim Hesaplama Motoru doğrulaması', async () => {
+    const { calculateLgsScoreAndPercentile } = await import(
+      '../src/services/calculationEngine'
+    );
+
+    // Full 90 net (All correct)
+    const fullResults = createDefaultSubjectResults().map((s) => ({
+      ...s,
+      correct: s.questionCount,
+      wrong: 0,
+      blank: 0,
+      net: s.questionCount,
+    }));
+    const fullCalc = calculateLgsScoreAndPercentile(fullResults);
+    expect(fullCalc.totalNet).toBe(90);
+    expect(fullCalc.score).toBe(500);
+    expect(fullCalc.percentile).toBeLessThanOrEqual(0.05);
+
+    // Realistic high performer (78 net)
+    const realisticResults = createDefaultSubjectResults().map((s) => {
+      if (s.subjectId === 'matematik') return { ...s, correct: 16, wrong: 3, blank: 1, net: 15 };
+      if (s.subjectId === 'fen') return { ...s, correct: 18, wrong: 2, blank: 0, net: 17.33 };
+      if (s.subjectId === 'turkce') return { ...s, correct: 18, wrong: 2, blank: 0, net: 17.33 };
+      return { ...s, correct: s.questionCount, wrong: 0, blank: 0, net: s.questionCount };
+    });
+    const realisticCalc = calculateLgsScoreAndPercentile(realisticResults);
+    expect(realisticCalc.score).toBeGreaterThan(450);
+    expect(realisticCalc.score).toBeLessThan(500);
+    expect(realisticCalc.percentile).toBeGreaterThan(0.1);
+    expect(realisticCalc.percentile).toBeLessThan(5.0);
+
+    // Zero net
+    const zeroResults = createDefaultSubjectResults().map((s) => ({
+      ...s,
+      correct: 0,
+      wrong: 0,
+      blank: s.questionCount,
+      net: 0,
+    }));
+    const zeroCalc = calculateLgsScoreAndPercentile(zeroResults);
+    expect(zeroCalc.totalNet).toBe(0);
+    expect(zeroCalc.score).toBe(194.5);
+    expect(zeroCalc.percentile).toBe(99);
+  });
 });

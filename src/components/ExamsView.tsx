@@ -17,6 +17,7 @@ import {
   resolveEffectiveTopic,
 } from '../data/curriculum';
 import {
+  calculateLgsScoreAndPercentile,
   calculateSubjectNet,
   checkDuplicateExam,
   computeExamTotals,
@@ -33,7 +34,7 @@ import {
   SubjectExamResult,
   SubjectId,
 } from '../types/models';
-import { SubjectNetBars } from './Charts';
+import { SubjectBreakdownBarChart, SubjectNetBars } from './Charts';
 
 interface ExamsViewProps {
   student: StudentProfile;
@@ -108,6 +109,9 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [duplicateWarningExam, setDuplicateWarningExam] =
     useState<ExamRecord | null>(null);
+
+  // Real-time 2026 LGS score and percentile calculation
+  const autoLgsCalc = calculateLgsScoreAndPercentile(subjectRows);
 
   useEffect(() => {
     if (openCreateModalTrigger > 0) {
@@ -259,6 +263,11 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
     }
 
     const nowIso = new Date().toISOString();
+    const finalScore = providerScore ? Number(providerScore) : autoLgsCalc.score;
+    const finalPercentile = providerPercentile
+      ? Number(providerPercentile)
+      : autoLgsCalc.percentile;
+
     const record: ExamRecord = {
       id: editingExam?.id || `exam-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       studentId: student.id,
@@ -268,15 +277,15 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
       examType,
       participantCount: participantCount ? Number(participantCount) : null,
       rankInExam: rankInExam ? Number(rankInExam) : null,
-      providerScore: providerScore ? Number(providerScore) : null,
-      providerPercentile: providerPercentile ? Number(providerPercentile) : null,
+      providerScore: finalScore,
+      providerPercentile: finalPercentile,
       subjectResults: subjectRows.map((r) => ({
         ...r,
         net: calculateSubjectNet(r.correct, r.wrong),
       })),
       ...totals,
       notes: notes.trim(),
-      isDemo: editingExam?.isDemo ?? false,
+      isDemo: false,
       createdAt: editingExam?.createdAt || nowIso,
       updatedAt: nowIso,
     };
@@ -443,34 +452,33 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                   </div>
                 </div>
 
-                <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                  <div className="text-[11px] text-slate-500">
-                    Sağlayıcının Açıkladığı Puan
+                <div className="bg-white p-3.5 rounded-xl border border-turquoise-200 shadow-2xs">
+                  <div className="text-[11px] font-bold text-turquoise-800">
+                    2026 LGS Hesaplanan Puanı
                   </div>
-                  <div className="text-base font-extrabold text-navy-900 mt-1">
+                  <div className="text-lg font-extrabold text-navy-900 mt-1">
                     {selectedExam.providerScore
                       ? `${selectedExam.providerScore.toFixed(2)} Puan`
-                      : 'Girilmedi'}
+                      : 'Hesaplanıyor'}
                   </div>
                   <div className="text-[10px] text-slate-500">
-                    (Deneme kurumu puanıdır)
+                    MEB 2026 Katsayı Standardı
                   </div>
                 </div>
 
-                <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-                  <div className="text-[11px] text-slate-500">
-                    Deneme İçi Sıralama & Yüzdelik
+                <div className="bg-white p-3.5 rounded-xl border border-turquoise-200 shadow-2xs">
+                  <div className="text-[11px] font-bold text-turquoise-800">
+                    2026 LGS Yüzdelik Dilimi
                   </div>
-                  <div className="text-sm font-extrabold text-navy-900 mt-1">
-                    {selectedExam.rankInExam && selectedExam.participantCount
-                      ? `${selectedExam.rankInExam.toLocaleString('tr-TR')} / ${selectedExam.participantCount.toLocaleString('tr-TR')} (%${(
-                          (selectedExam.rankInExam /
-                            selectedExam.participantCount) *
-                          100
-                        ).toFixed(2)})`
-                      : selectedExam.providerPercentile
-                      ? `%${selectedExam.providerPercentile}`
+                  <div className="text-lg font-extrabold text-navy-900 mt-1">
+                    {selectedExam.providerPercentile
+                      ? `%${Number(selectedExam.providerPercentile).toFixed(2)}`
                       : 'Belirtilmedi'}
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    {selectedExam.rankInExam && selectedExam.participantCount
+                      ? `Sıra: ${selectedExam.rankInExam.toLocaleString('tr-TR')} / ${selectedExam.participantCount.toLocaleString('tr-TR')}`
+                      : 'Antalya lise tercih eşleşme temeli'}
                   </div>
                 </div>
               </div>
@@ -548,6 +556,14 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                     <strong>Veli / Öğrenci Notu:</strong> {selectedExam.notes}
                   </div>
                 )}
+
+                {/* Ders Bazlı Doğru, Yanlış ve Boş Dağılım Grafiği */}
+                <div className="bg-white rounded-2xl p-4 border border-slate-200 space-y-3 mt-4">
+                  <h3 className="font-bold text-sm text-navy-900">
+                    Ders Bazında Doğru, Yanlış ve Boş Dağılım Grafiği
+                  </h3>
+                  <SubjectBreakdownBarChart exams={[selectedExam]} />
+                </div>
               </div>
             </div>
           )}
@@ -929,11 +945,6 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                         <span className="text-[11px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-medium">
                           {exam.publisher}
                         </span>
-                        {exam.isDemo && (
-                          <span className="text-[10px] font-bold bg-amber-300 text-navy-950 px-2 py-0.5 rounded">
-                            DEMO VERİSİ
-                          </span>
-                        )}
                       </div>
                       <h3 className="text-sm font-extrabold text-navy-900 mt-1">
                         {exam.name}
@@ -945,6 +956,14 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                         <div className="text-lg font-extrabold text-navy-900">
                           {exam.totalNet.toFixed(2)} Net
                         </div>
+                        {exam.providerScore && (
+                          <div className="text-xs font-bold text-turquoise-700">
+                            {exam.providerScore.toFixed(2)} Puan
+                            {exam.providerPercentile
+                              ? ` • %${Number(exam.providerPercentile).toFixed(2)}`
+                              : ''}
+                          </div>
+                        )}
                         <div className="text-[11px] text-slate-500">
                           {exam.totalCorrect}D • {exam.totalWrong}Y •{' '}
                           {exam.totalBlank}B
@@ -1155,9 +1174,18 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Sağlayıcı Puanı (Varsa)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700">
+                      Puan (2026 LGS)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setProviderScore(autoLgsCalc.score.toFixed(2))}
+                      className="text-[10px] text-turquoise-700 font-bold hover:underline"
+                    >
+                      Otomatik Al
+                    </button>
+                  </div>
                   <input
                     type="number"
                     step="0.01"
@@ -1165,8 +1193,35 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                     max="500"
                     value={providerScore}
                     onChange={(e) => setProviderScore(e.target.value)}
-                    placeholder="Örn: 458.40"
-                    className="w-full border border-slate-300 rounded-lg px-2.5 py-2"
+                    placeholder={`Otomatik: ${autoLgsCalc.score.toFixed(2)}`}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-2 font-semibold text-navy-900"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold text-slate-700">
+                      Yüzdelik Dilim (%)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setProviderPercentile(autoLgsCalc.percentile.toFixed(2))
+                      }
+                      className="text-[10px] text-turquoise-700 font-bold hover:underline"
+                    >
+                      Otomatik Al
+                    </button>
+                  </div>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="99.99"
+                    value={providerPercentile}
+                    onChange={(e) => setProviderPercentile(e.target.value)}
+                    placeholder={`Otomatik: %${autoLgsCalc.percentile.toFixed(2)}`}
+                    className="w-full border border-slate-300 rounded-lg px-2.5 py-2 font-semibold text-navy-900"
                   />
                 </div>
 
@@ -1196,6 +1251,37 @@ export const ExamsView: React.FC<ExamsViewProps> = ({
                     placeholder="Örn: 1240"
                     className="w-full border border-slate-300 rounded-lg px-2.5 py-2"
                   />
+                </div>
+              </div>
+
+              {/* 2026 LGS Otomatik Hesaplama Canlı Bilgi Kartı */}
+              <div className="bg-gradient-to-r from-navy-900 via-navy-800 to-navy-950 text-white p-3.5 rounded-xl border border-navy-700 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-[11px] font-bold text-turquoise-300 flex items-center gap-1.5">
+                    <span>🎯 2026 LGS Otomatik Hesaplama</span>
+                    <span className="text-[10px] bg-turquoise-500/20 text-turquoise-300 border border-turquoise-400/30 px-2 py-0.5 rounded-full font-semibold">
+                      Canlı
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-lg font-extrabold text-white">
+                      {autoLgsCalc.score.toFixed(2)} Puan
+                    </span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-lg font-extrabold text-turquoise-300">
+                      %{autoLgsCalc.percentile.toFixed(2)} Dilim
+                    </span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-xs font-semibold text-slate-200">
+                      Toplam {autoLgsCalc.totalNet.toFixed(2)} Net
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[10px] text-slate-300 text-right">
+                  <div>MEB Standart Katsayıları (TR:4, MAT:4, FEN:4, İNK:1, DİN:1, İNG:1)</div>
+                  <div className="text-turquoise-200 font-semibold">
+                    Doğru ve yanlışlar girildikçe otomatik güncellenir
+                  </div>
                 </div>
               </div>
 

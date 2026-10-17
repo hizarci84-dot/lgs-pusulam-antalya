@@ -455,11 +455,6 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
               >
                 {status === 'wrong' ? 'YANLIŞ SORU' : 'BOŞ SORU'}
               </span>
-              {question.isDemo && (
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-amber-300 text-navy-950">
-                  DEMO VERİSİ
-                </span>
-              )}
             </div>
             <h3 className="font-bold text-base mt-1">
               {exam?.name || 'Deneme Sınavı'}{' '}

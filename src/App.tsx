@@ -48,7 +48,6 @@ import {
   saveStudyPlan,
   setActiveStudentId,
 } from './services/db';
-import { seedDemoStudentDataset } from './services/demoSeeder';
 import {
   analyzeRecurringPatterns,
   generatePersonalizedStudyPlan,
@@ -166,8 +165,37 @@ export const App: React.FC = () => {
       setCloudSettings(cs);
 
       if (studentsList.length === 0) {
-        setActiveStudent(null);
+        const defaultAtakan: StudentProfile = {
+          id: 'student-atakan',
+          nickname: 'Atakan',
+          gradeLevel: '8. Sınıf',
+          antalyaDistrict: 'Muratpaşa',
+          targetSchoolIds: [
+            'antalya-yusuf-ziya-oner-fen-lisesi-döşemealtı-fen-lisesi',
+            'antalya-antalya-anadolu-lisesi-muratpaşa-anadolu-lisesi',
+          ],
+          targetSchoolTypes: ['Fen Lisesi', 'Anadolu Lisesi'],
+          targetPercentile: 1.5,
+          weeklyStudyHours: 14,
+          dailyStudyMinutes: 120,
+          boardingPreference: 'farketmez',
+          foreignLanguagePreferences: ['İngilizce'],
+          preferredDistricts: ['Muratpaşa', 'Konyaaltı', 'Döşemealtı', 'Kepez'],
+          reviewIntervalsDays: [0, 1, 3, 7],
+          isDemo: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await saveStudentProfile(defaultAtakan);
+        await setActiveStudentId(defaultAtakan.id);
+        await loadStudentWorkspace(defaultAtakan.id);
       } else {
+        const first = studentsList[0];
+        if (first && (first.isDemo || first.nickname?.includes('Demo'))) {
+          first.nickname = 'Atakan';
+          first.isDemo = false;
+          await saveStudentProfile(first);
+        }
         const chosenId =
           storedActiveId && studentsList.some((s) => s.id === storedActiveId)
             ? storedActiveId
@@ -256,11 +284,6 @@ export const App: React.FC = () => {
     await deleteStudentAndAllData(studentId);
     await initializeApp();
     triggerBackgroundSync();
-  };
-
-  const handleLoadDemoData = async () => {
-    const demoStu = await seedDemoStudentDataset();
-    await loadStudentWorkspace(demoStu.id);
   };
 
   const handleSaveExam = async (exam: ExamRecord) => {
@@ -560,7 +583,6 @@ export const App: React.FC = () => {
                 }}
                 onOpenQuestionModal={(qId) => setActiveQuestionModalId(qId)}
                 onToggleStudyTask={handleToggleStudyTask}
-                onLoadDemoData={handleLoadDemoData}
               />
             )}
 
@@ -700,7 +722,6 @@ export const App: React.FC = () => {
           onSaveStudent={handleSaveStudent}
           onSwitchStudent={handleSwitchStudent}
           onDeleteStudent={handleDeleteStudent}
-          onLoadDemoData={handleLoadDemoData}
           onExportBackup={handleExportFullBackup}
           onRestoreBackup={handleRestoreFullBackup}
           onClearAllData={handleClearAllData}

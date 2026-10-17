@@ -28,7 +28,12 @@ import {
   StudentProfile,
   WeeklyStudyPlan,
 } from '../types/models';
-import { NetTrendChart, SubjectNetBars } from './Charts';
+import {
+  NetTrendChart,
+  PercentileHistogramChart,
+  SubjectBreakdownBarChart,
+  SubjectNetBars,
+} from './Charts';
 
 interface HomeViewProps {
   student: StudentProfile;
@@ -45,7 +50,6 @@ interface HomeViewProps {
   onSelectExamDetail: (examId: string) => void;
   onOpenQuestionModal: (questionId: string) => void;
   onToggleStudyTask: (taskId: string) => Promise<void>;
-  onLoadDemoData: () => Promise<void>;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -63,7 +67,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onSelectExamDetail,
   onOpenQuestionModal,
   onToggleStudyTask,
-  onLoadDemoData,
 }) => {
   const [trendLimit, setTrendLimit] = useState<5 | 10>(5);
 
@@ -116,11 +119,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <span className="text-xs font-bold uppercase tracking-wider text-turquoise-300">
                 LGS Pusulam – Antalya
               </span>
-              {student.isDemo && (
-                <span className="bg-amber-400 text-navy-950 text-[11px] font-extrabold px-2 py-0.5 rounded">
-                  DEMO VERİSİ
-                </span>
-              )}
             </div>
             <h1 className="text-lg font-extrabold mt-0.5">
               {student.nickname
@@ -228,14 +226,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
               <PlusCircle className="w-4 h-4 text-turquoise-400" />
               İlk Deneme Sınavını Ekle
             </button>
-            <button
-              type="button"
-              onClick={onLoadDemoData}
-              className="px-4 py-2.5 bg-amber-100 hover:bg-amber-200 text-navy-950 font-bold text-xs rounded-xl flex items-center gap-1.5 border border-amber-300"
-            >
-              <Sparkles className="w-4 h-4 text-amber-700" />
-              Örnek DEMO VERİSİ ile Keşfet
-            </button>
           </div>
         </div>
       ) : (
@@ -256,17 +246,25 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </div>
             </div>
 
-            {/* 2. Son denemedeki toplam net */}
+            {/* 2. Son denemedeki toplam net ve 2026 LGS Puanı */}
             <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-2xs">
               <div className="text-[11px] font-semibold text-slate-500">
-                Son Deneme Toplam Net
+                Son Deneme Net & 2026 LGS
               </div>
               <div className="text-xl font-extrabold text-navy-900 mt-1">
                 {latestExam?.totalNet.toFixed(2)}{' '}
                 <span className="text-xs font-normal text-slate-500">
-                  / {latestExam?.totalQuestions}
+                  / {latestExam?.totalQuestions} Net
                 </span>
               </div>
+              {latestExam?.providerScore && (
+                <div className="text-xs font-bold text-turquoise-700 mt-0.5">
+                  {latestExam.providerScore.toFixed(2)} Puan
+                  {latestExam.providerPercentile
+                    ? ` • %${Number(latestExam.providerPercentile).toFixed(2)} Dilim`
+                    : ''}
+                </div>
+              )}
               <div className="text-[11px] text-slate-600 mt-0.5">
                 {latestExam?.totalCorrect}D • {latestExam?.totalWrong}Y •{' '}
                 {latestExam?.totalBlank}B
@@ -407,6 +405,33 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 />
               </div>
             )}
+          </div>
+
+          {/* Yüzdelik Dilim Histogramı ve Ders Bazında Doğru, Yanlış, Boş Grafikleri */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+              <div>
+                <h2 className="font-bold text-sm text-navy-900">
+                  Deneme Yüzdelik Dilim Dağılımı (Histogram)
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Öğrencinin tüm denemelerindeki Türkiye geneli yüzdelik dilim dağılımı
+                </p>
+              </div>
+              <PercentileHistogramChart exams={exams} student={student} />
+            </div>
+
+            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+              <div>
+                <h2 className="font-bold text-sm text-navy-900">
+                  Ders Bazında Doğru, Yanlış ve Boş Grafiği
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Yeşil: Doğru • Kırmızı: Yanlış • Sarı: Boş (Tüm denemeler veya tekil deneme)
+                </p>
+              </div>
+              <SubjectBreakdownBarChart exams={exams} />
+            </div>
           </div>
 
           {/* 8 & 9: Tekrar Eden Konu Eksikleri & Bugün Tekrar Edilmesi Gereken Sorular */}
