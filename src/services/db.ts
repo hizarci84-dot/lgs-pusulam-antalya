@@ -15,7 +15,7 @@ const DB_NAME = 'lgs-pusulam-antalya-db';
 const DB_VERSION = 2;
 
 export interface FullBackupPayload {
-  appName: 'LGS Pusulam – Antalya';
+  appName: 'Atakan LGS Pusulam';
   schemaVersion: number;
   exportedAt: string;
   activeStudentId: string | null;
@@ -74,12 +74,13 @@ export function getDb(): Promise<IDBPDatabase> {
 
 // ==================== APP SETTINGS & CLOUD SYNC ====================
 export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
-  enabled: false,
+  enabled: true,
   provider: 'google_script',
   familySyncId: 'atakan-lgs-2026',
   familySecretPin: '',
   firebaseConfig: null,
-  googleScriptUrl: null,
+  googleScriptUrl:
+    'https://script.google.com/macros/s/AKfycbzF7Fon8QOOEaodXypOF1hnKMxbp2NhC4S-p5Lw7At83E8JAIK-1tsMqVOF0WsPIDHq/exec',
   autoSync: true,
   lastSyncedAt: null,
   lastSyncStatus: 'idle',
@@ -340,7 +341,7 @@ export async function exportFullBackup(): Promise<FullBackupPayload> {
   ]);
 
   return {
-    appName: 'LGS Pusulam – Antalya',
+    appName: 'Atakan LGS Pusulam',
     schemaVersion: DB_VERSION,
     exportedAt: new Date().toISOString(),
     activeStudentId,

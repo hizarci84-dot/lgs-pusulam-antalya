@@ -412,7 +412,7 @@ export const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-navy-950 text-white flex flex-col items-center justify-center p-6">
         <Compass className="w-12 h-12 text-turquoise-400 animate-spin mb-3" />
-        <div className="font-extrabold text-base">LGS Pusulam – Antalya</div>
+        <div className="font-extrabold text-base">Atakan LGS Pusulam – Antalya</div>
         <div className="text-xs text-turquoise-200 mt-1">
           Yerel veri tabanı ve analiz motoru hazırlanıyor...
         </div>
@@ -437,7 +437,7 @@ export const App: React.FC = () => {
             </div>
             <div>
               <div className="font-extrabold text-sm leading-tight tracking-tight flex items-center gap-1.5">
-                <span>LGS Pusulam</span>
+                <span>Atakan LGS Pusulam</span>
                 <span className="text-turquoise-300">Antalya</span>
               </div>
               <div className="text-[11px] text-slate-300 leading-tight">
