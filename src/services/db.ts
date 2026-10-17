@@ -75,8 +75,8 @@ export function getDb(): Promise<IDBPDatabase> {
 // ==================== APP SETTINGS & CLOUD SYNC ====================
 export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
   enabled: false,
-  provider: 'none',
-  familySyncId: '',
+  provider: 'google_script',
+  familySyncId: 'atakan-lgs-2026',
   familySecretPin: '',
   firebaseConfig: null,
   googleScriptUrl: null,

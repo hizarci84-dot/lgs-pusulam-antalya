@@ -41,7 +41,7 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   onSyncComplete,
 }) => {
   const [settings, setSettings] = useState<CloudSyncSettings>(DEFAULT_CLOUD_SYNC_SETTINGS);
-  const [provider, setProvider] = useState<CloudProviderType>('firebase');
+  const [provider, setProvider] = useState<CloudProviderType>('google_script');
   const [familySyncId, setFamilySyncId] = useState('');
   const [familySecretPin, setFamilySecretPin] = useState('');
   const [autoSync, setAutoSync] = useState(true);
@@ -75,7 +75,7 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
   const loadSettings = async () => {
     const s = await getCloudSyncSettings();
     setSettings(s);
-    setProvider(s.provider === 'none' ? 'firebase' : s.provider);
+    setProvider(s.provider === 'none' ? 'google_script' : s.provider);
     setFamilySyncId(s.familySyncId || 'atakan-lgs-2026');
     setFamilySecretPin(s.familySecretPin || '');
     setAutoSync(s.autoSync);
@@ -314,9 +314,32 @@ function doPost(e) {
           {/* Step 2: Choose Cloud Provider */}
           <div className="space-y-3">
             <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider block">
-              2. Bulut Sağlayıcısı Seçin
+              2. Bulut Depolama Tercihiniz
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setProvider('google_script')}
+                className={`p-4 rounded-xl border text-left transition-all relative ${
+                  provider === 'google_script'
+                    ? 'border-emerald-500 bg-emerald-50/60 shadow-sm ring-2 ring-emerald-400/40'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center space-x-2 text-navy-900 font-semibold text-sm mb-1">
+                  <Cloud className="w-4 h-4 text-emerald-600" />
+                  <span>Google Drive (Seçiminiz)</span>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Kendi Google hesabınızda 15 GB ücretsiz Drive alanında saklanır. Soru fotoğrafları Drive'ınızda klasörlenir.
+                </p>
+                {provider === 'google_script' && (
+                  <span className="absolute top-2 right-2 text-[10px] bg-emerald-600 text-white font-medium px-2 py-0.5 rounded">
+                    Önerilen
+                  </span>
+                )}
+              </button>
+
               <button
                 type="button"
                 onClick={() => setProvider('firebase')}
@@ -331,30 +354,7 @@ function doPost(e) {
                   <span>Firebase (Google Cloud)</span>
                 </div>
                 <p className="text-xs text-slate-500">
-                  Gerçek zamanlı eşitleme. Bir cihazdan soru yüklendiğinde diğerlerinde saniyeler içinde belirir.
-                </p>
-                {provider === 'firebase' && (
-                  <span className="absolute top-2 right-2 text-[10px] bg-turquoise-600 text-white font-medium px-1.5 py-0.5 rounded">
-                    Önerilen
-                  </span>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setProvider('google_script')}
-                className={`p-4 rounded-xl border text-left transition-all ${
-                  provider === 'google_script'
-                    ? 'border-turquoise-500 bg-turquoise-50/50 shadow-sm'
-                    : 'border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                <div className="flex items-center space-x-2 text-navy-900 font-semibold text-sm mb-1">
-                  <Cloud className="w-4 h-4 text-blue-600" />
-                  <span>Google Drive / Apps Script</span>
-                </div>
-                <p className="text-xs text-slate-500">
-                  Kendi Google hesabınızda 15 GB ücretsiz Drive alanınızda saklanır. 1 dakikalık URL kurulumu.
+                  Gerçek zamanlı alternatif bulut seçeneği.
                 </p>
               </button>
             </div>

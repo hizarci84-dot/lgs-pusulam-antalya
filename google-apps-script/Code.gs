@@ -1,17 +1,24 @@
 /**
  * LGS PUSULAM – ANTALYA
- * Google Apps Script & Google Drive Bulut Senkronizasyon Kodu
+ * Google Drive & Google Apps Script Bulut Senkronizasyon Kodu
  * 
- * KURULUM ADIMLARI (1 Dakika):
- * 1. https://script.google.com adresine gidin.
- * 2. "Yeni Proje" (New Project) butonuna tıklayın.
+ * Bu kod Google Drive hesabınızda "LGS Pusulam Antalya" klasörü oluşturur.
+ * İçerisine deneme sonuçlarını, öğrenci kayıtlarını ve soru fotoğraflarını 
+ * otomatik olarak kaydeder ve telefonunuz, tabletiniz ve eşinizin telefonu arasında eşitler.
+ * 
+ * 1 DAKİKADA KURULUM ADIMLARI:
+ * 1. https://script.google.com adresine Google hesabınızla gidin.
+ * 2. Sol üstteki "Yeni Proje" (New Project) butonuna tıklayın.
  * 3. Proje adını "LGS Pusulam Sync" yapın.
  * 4. Bu dosyadaki kodun tamamını kopyalayıp editöre yapıştırın ve Kaydet (Ctrl+S) deyin.
- * 5. Sağ üstteki "Dağıt" (Deploy) -> "Yeni Dağıtım" (New Deployment) seçeneğine tıklayın.
+ * 5. Sağ üstteki mavi "Dağıt" (Deploy) butonuna basıp "Yeni Dağıtım" (New Deployment) seçin.
  * 6. Sol taraftaki çark simgesinden "Web Uygulaması" (Web App) seçin.
- * 7. "Erişimi olanlar" (Who has access) kısmını "Herkes" (Anyone) olarak seçin.
+ * 7. "Açıklama": LGS Pusulam V1
+ *    "Web Uygulamasını Farklı Çalıştır": "Ben (hesabınız)"
+ *    "Erişimi Olanlar": "Herkes" (Anyone) olarak seçin.
  * 8. "Dağıt" butonuna basın ve size verilen "Web Uygulaması URL" adresini kopyalayın.
- * 9. LGS Pusulam uygulamasında Ayarlar -> Bulut & Eşitleme ekranına bu URL'yi yapıştırın!
+ *    (Örn: https://script.google.com/macros/s/.../exec)
+ * 9. LGS Pusulam uygulamasında "Bulut Eşitle" butonuna basıp bu URL'yi yapıştırın!
  */
 
 function doPost(e) {
@@ -21,20 +28,22 @@ function doPost(e) {
     var action = data.action;
     var familySyncId = data.familySyncId || 'default';
     
-    // 1. PING / TEST BAĞLANTISI
+    // 1. BAĞLANTI TESTİ (PING)
     if (action === 'ping') {
+      var testFolder = getOrCreateLgsFolder();
       return responseJson({
         success: true,
-        message: 'Google Apps Script bağlantısı başarılı! Sistem hazır.',
+        message: 'Google Drive bağlantısı başarılı! Klasör: "' + testFolder.getName() + '" hazır.',
         time: new Date().toISOString()
       });
     }
 
-    // 2. VERİ SENKRONİZASYONU
+    // 2. VERİ SENKRONİZASYONU (SYNC)
     if (action === 'sync') {
-      var folder = getOrCreateLgsFolder();
+      var rootFolder = getOrCreateLgsFolder();
+      var photoFolder = getOrCreateSubFolder(rootFolder, 'Soru Fotoğrafları');
       var fileName = 'lgs_data_' + familySyncId + '.json';
-      var file = getOrCreateJsonFile(folder, fileName);
+      var file = getOrCreateJsonFile(rootFolder, fileName);
       
       var cloudData = {};
       var fileContent = file.getBlob().getDataAsString();
@@ -55,7 +64,7 @@ function doPost(e) {
 
       var local = data.localChanges || {};
 
-      // A) Silinenleri işle
+      // A) Silinen kayıtları buluttan temizle
       (local.deletions || []).forEach(function(d) {
         cloudData.deletions[d.id] = d;
         if (d.entityType === 'student') delete cloudData.students[d.id];
@@ -72,10 +81,13 @@ function doPost(e) {
       (local.photoAssets || []).forEach(function(p) { cloudData.photoAssets[p.id] = p; });
       (local.studyPlans || []).forEach(function(sp) { cloudData.studyPlans[sp.id] = sp; });
 
-      // Buluttaki güncel veriyi dosyaya yaz
+      // C) Fotoğrafları Google Drive'da "Soru Fotoğrafları" klasörüne JPEG dosyası olarak kaydet
+      savePhotosToDriveFolder(photoFolder, local.photoAssets || []);
+
+      // D) Buluttaki güncel veriyi ana JSON dosyasına yaz
       file.setContent(JSON.stringify(cloudData));
 
-      // C) Buluttaki tüm veriyi diziye dönüştürüp cihaza geri gönder
+      // E) Buluttaki tüm güncel veriyi cihaza geri döndür
       var remoteChanges = {
         students: Object.values(cloudData.students),
         exams: Object.values(cloudData.exams),
@@ -100,9 +112,9 @@ function doPost(e) {
 
 function doGet(e) {
   return responseJson({
-    appName: 'LGS Pusulam Antalya Cloud Sync Engine',
+    appName: 'LGS Pusulam Antalya Google Drive Sync Engine',
     status: 'active',
-    instructions: 'Bu URL LGS Pusulam uygulaması içerisinden veri eşitlemek içindir.'
+    instructions: 'Bu URL LGS Pusulam uygulaması içerisinden Google Drive ile eşitlenmek içindir.'
   });
 }
 
@@ -115,12 +127,42 @@ function getOrCreateLgsFolder() {
   return DriveApp.createFolder(folderName);
 }
 
+function getOrCreateSubFolder(parentFolder, subName) {
+  var subs = parentFolder.getFoldersByName(subName);
+  if (subs.hasNext()) {
+    return subs.next();
+  }
+  return parentFolder.createFolder(subName);
+}
+
 function getOrCreateJsonFile(folder, fileName) {
   var files = folder.getFilesByName(fileName);
   if (files.hasNext()) {
     return files.next();
   }
   return folder.createFile(fileName, '{}', MimeType.PLAIN_TEXT);
+}
+
+function savePhotosToDriveFolder(photoFolder, photoAssets) {
+  if (!photoAssets || !photoAssets.length) return;
+  for (var i = 0; i < photoAssets.length; i++) {
+    var p = photoAssets[i];
+    var dataUrl = p.croppedDataUrl || p.originalDataUrl;
+    if (!dataUrl || dataUrl.indexOf('base64,') === -1) continue;
+    
+    var fileName = 'Soru_' + (p.questionId || p.id) + '.jpg';
+    var existing = photoFolder.getFilesByName(fileName);
+    if (!existing.hasNext()) {
+      try {
+        var base64 = dataUrl.split('base64,')[1];
+        var decoded = Utilities.base64Decode(base64);
+        var blob = Utilities.newBlob(decoded, 'image/jpeg', fileName);
+        photoFolder.createFile(blob);
+      } catch (e) {
+        // Devam et
+      }
+    }
+  }
 }
 
 function responseJson(obj) {
