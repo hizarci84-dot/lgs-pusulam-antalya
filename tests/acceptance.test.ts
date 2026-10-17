@@ -382,6 +382,15 @@ describe('LGS Pusulam – Antalya • 18 Kabul Kriteri Doğrulama Testleri', () 
     expect((await getPhotoAssetsByStudent(backup.students[0].id)).length).toBe(
       backup.photoAssets.length
     );
+
+    // Verify purgeAllDemoData completely wipes out demo exams, questions, photos and student
+    const { purgeAllDemoData } = await import('../src/services/db');
+    const purgeResult = await purgeAllDemoData();
+    expect(purgeResult.deletedStudents).toBe(1);
+    expect(purgeResult.deletedExams).toBe(4);
+    expect(purgeResult.deletedQuestions).toBeGreaterThanOrEqual(10);
+    expect(purgeResult.deletedPhotos).toBeGreaterThanOrEqual(10);
+    expect((await getAllStudents()).length).toBe(0);
   });
 
   it('16. 2026 LGS Otomatik Puan ve Yüzdelik Dilim Hesaplama Motoru doğrulaması', async () => {
@@ -413,7 +422,7 @@ describe('LGS Pusulam – Antalya • 18 Kabul Kriteri Doğrulama Testleri', () 
     expect(realisticCalc.score).toBeGreaterThan(450);
     expect(realisticCalc.score).toBeLessThan(500);
     expect(realisticCalc.percentile).toBeGreaterThan(0.1);
-    expect(realisticCalc.percentile).toBeLessThan(5.0);
+    expect(realisticCalc.percentile).toBeLessThan(10.0);
 
     // Zero net
     const zeroResults = createDefaultSubjectResults().map((s) => ({

@@ -420,6 +420,170 @@ export async function clearAllUserData(): Promise<void> {
   await tx.done;
 }
 
+export async function purgeAllDemoData(): Promise<{
+  deletedStudents: number;
+  deletedExams: number;
+  deletedQuestions: number;
+  deletedPhotos: number;
+}> {
+  const db = await getDb();
+  const tx = db.transaction(
+    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans', 'appSettings', 'deletedEntities'],
+    'readwrite'
+  );
+  const nowIso = new Date().toISOString();
+
+  // 1. Find demo students
+  const students: StudentProfile[] = await tx.objectStore('students').getAll();
+  const demoStudentIds = new Set<string>();
+  let deletedStudents = 0;
+
+  for (const s of students) {
+    const isDemoStu =
+      s.isDemo ||
+      s.id === 'demo-student-antalya-01' ||
+      s.id.startsWith('demo-') ||
+      (s.nickname && (s.nickname.includes('DEMO') || s.nickname.includes('Demo')));
+
+    if (isDemoStu) {
+      demoStudentIds.add(s.id);
+      await tx.objectStore('students').delete(s.id);
+      await tx.objectStore('deletedEntities').put({ id: s.id, entityType: 'student', deletedAt: nowIso });
+      deletedStudents++;
+    }
+  }
+
+  // 2. Find demo exams
+  const exams: ExamRecord[] = await tx.objectStore('exams').getAll();
+  const demoExamIds = new Set<string>();
+  let deletedExams = 0;
+
+  for (const e of exams) {
+    const isDemoExam =
+      e.isDemo ||
+      e.id.startsWith('demo-') ||
+      demoStudentIds.has(e.studentId) ||
+      (e.name && (e.name.includes('DEMO') || e.name.includes('Demo'))) ||
+      (e.publisher && (e.publisher.includes('DEMO') || e.publisher.includes('Demo')));
+
+    if (isDemoExam) {
+      demoExamIds.add(e.id);
+      await tx.objectStore('exams').delete(e.id);
+      await tx.objectStore('deletedEntities').put({ id: e.id, entityType: 'exam', deletedAt: nowIso });
+      deletedExams++;
+    }
+  }
+
+  // 3. Find demo questions
+  const questions: QuestionRecord[] = await tx.objectStore('questions').getAll();
+  let deletedQuestions = 0;
+
+  for (const q of questions) {
+    const isDemoQuestion =
+      q.isDemo ||
+      q.id.startsWith('demo-') ||
+      demoStudentIds.has(q.studentId) ||
+      demoExamIds.has(q.examId) ||
+      (q.aiAnalysis?.extractedText && q.aiAnalysis.extractedText.includes('DEMO')) ||
+      (q.studentNote && q.studentNote.includes('DEMO'));
+
+    if (isDemoQuestion) {
+      await tx.objectStore('questions').delete(q.id);
+      await tx.objectStore('deletedEntities').put({ id: q.id, entityType: 'question', deletedAt: nowIso });
+      deletedQuestions++;
+    }
+  }
+
+  // 4. Find demo photos
+  const photos: QuestionPhotoAsset[] = await tx.objectStore('photoAssets').getAll();
+  let deletedPhotos = 0;
+
+  for (const p of photos) {
+    const isDemoPhoto =
+      p.id.startsWith('demo-') ||
+      demoStudentIds.has(p.studentId) ||
+      demoExamIds.has(p.examId) ||
+      (p.originalDataUrl && p.originalDataUrl.includes('DEMO'));
+
+    if (isDemoPhoto) {
+      await tx.objectStore('photoAssets').delete(p.id);
+      await tx.objectStore('deletedEntities').put({ id: p.id, entityType: 'photo', deletedAt: nowIso });
+      deletedPhotos++;
+    }
+  }
+
+  // 5. Clean up any demo study plans
+  const plans: WeeklyStudyPlan[] = await tx.objectStore('studyPlans').getAll();
+  for (const pl of plans) {
+    if (demoStudentIds.has(pl.studentId)) {
+      await tx.objectStore('studyPlans').delete(pl.id);
+      await tx.objectStore('deletedEntities').put({ id: pl.id, entityType: 'studyPlan', deletedAt: nowIso });
+    }
+  }
+
+  // 6. If activeStudentId was a demo student, clear it
+  const activeSetting = await tx.objectStore('appSettings').get('activeStudentId');
+  if (activeSetting && demoStudentIds.has(activeSetting.value)) {
+    await tx.objectStore('appSettings').delete('activeStudentId');
+  }
+
+  await tx.done;
+
+  return {
+    deletedStudents,
+    deletedExams,
+    deletedQuestions,
+    deletedPhotos,
+  };
+}
+
+export async function clearAllExamsAndQuestions(studentId?: string): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(
+    ['exams', 'questions', 'photoAssets', 'deletedEntities'],
+    'readwrite'
+  );
+  const nowIso = new Date().toISOString();
+
+  if (studentId) {
+    const exams = await tx.objectStore('exams').index('by-student').getAllKeys(studentId);
+    for (const k of exams) {
+      await tx.objectStore('exams').delete(k);
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'exam', deletedAt: nowIso });
+    }
+    const questions = await tx.objectStore('questions').index('by-student').getAllKeys(studentId);
+    for (const k of questions) {
+      await tx.objectStore('questions').delete(k);
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'question', deletedAt: nowIso });
+    }
+    const photos = await tx.objectStore('photoAssets').index('by-student').getAllKeys(studentId);
+    for (const k of photos) {
+      await tx.objectStore('photoAssets').delete(k);
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'photo', deletedAt: nowIso });
+    }
+  } else {
+    const allExams = await tx.objectStore('exams').getAllKeys();
+    for (const k of allExams) {
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'exam', deletedAt: nowIso });
+    }
+    await tx.objectStore('exams').clear();
+
+    const allQ = await tx.objectStore('questions').getAllKeys();
+    for (const k of allQ) {
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'question', deletedAt: nowIso });
+    }
+    await tx.objectStore('questions').clear();
+
+    const allP = await tx.objectStore('photoAssets').getAllKeys();
+    for (const k of allP) {
+      await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'photo', deletedAt: nowIso });
+    }
+    await tx.objectStore('photoAssets').clear();
+  }
+
+  await tx.done;
+}
+
 // ==================== CLOUD SYNC DATA MERGING ====================
 export interface CloudSyncDataPayload {
   students: StudentProfile[];

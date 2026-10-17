@@ -29,6 +29,7 @@ interface ProfileAndSettingsModalProps {
   onExportBackup: () => Promise<void>;
   onRestoreBackup: (payload: FullBackupPayload) => Promise<void>;
   onClearAllData: () => Promise<void>;
+  onClearExamsAndQuestions?: () => Promise<void>;
   onOpenCloudSync?: () => void;
 }
 
@@ -53,6 +54,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onExportBackup,
   onRestoreBackup,
   onClearAllData,
+  onClearExamsAndQuestions,
   onOpenCloudSync,
 }) => {
   const [activeTab, setActiveTab] = useState<'profile' | 'backup' | 'privacy'>(
@@ -770,6 +772,32 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                     />
                   </label>
                 </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2.5">
+                <h4 className="font-bold text-sm text-navy-900">
+                  Denemeleri ve Yanlış Soru Fotoğraflarını Temizle
+                </h4>
+                <p className="text-slate-700">
+                  Örnek veya test amaçlı girilen tüm deneme sınavlarını, yanlış ve boş soru fotoğraflarını cihazınızdan ve buluttan temizler. Atakan profili ve lise tercih hedefleriniz korunur.
+                </p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (
+                      window.confirm(
+                        'Kayıtlı TÜM deneme sınavlarını ve yanlış/boş soru fotoğraflarını silmek istediğinize emin misiniz? (Öğrenci profili korunur)'
+                      )
+                    ) {
+                      await onClearExamsAndQuestions?.();
+                      setStatusBanner('Tüm denemeler ve soru fotoğrafları temizlendi.');
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Denemeleri ve Soru Fotoğraflarını Temizle
+                </button>
               </div>
 
               <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 space-y-2.5">

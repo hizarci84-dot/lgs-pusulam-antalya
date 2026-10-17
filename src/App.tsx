@@ -25,6 +25,7 @@ import { SchoolsView } from './components/SchoolsView';
 import { computePercentileAndScoreEstimate } from './services/calculationEngine';
 import { syncWithCloud } from './services/cloudSync';
 import {
+  clearAllExamsAndQuestions,
   clearAllUserData,
   DEFAULT_CLOUD_SYNC_SETTINGS,
   deleteExamRecord,
@@ -40,6 +41,7 @@ import {
   getPhotoAssetsByStudent,
   getQuestionsByStudent,
   getStudyPlanByStudent,
+  purgeAllDemoData,
   restoreFromBackup,
   saveExamRecord,
   savePhotoAsset,
@@ -154,6 +156,9 @@ export const App: React.FC = () => {
   const initializeApp = useCallback(async () => {
     setIsLoading(true);
     try {
+      // Automatically purge any sample/demo exams, questions, photos, and demo students
+      await purgeAllDemoData();
+
       const [studentsList, storedActiveId, schoolList, cs] = await Promise.all([
         getAllStudents(),
         getActiveStudentId(),
@@ -284,6 +289,14 @@ export const App: React.FC = () => {
     await deleteStudentAndAllData(studentId);
     await initializeApp();
     triggerBackgroundSync();
+  };
+
+  const handleClearExamsAndQuestions = async () => {
+    if (activeStudent) {
+      await clearAllExamsAndQuestions(activeStudent.id);
+      await loadStudentWorkspace(activeStudent.id);
+      triggerBackgroundSync();
+    }
   };
 
   const handleSaveExam = async (exam: ExamRecord) => {
@@ -725,6 +738,7 @@ export const App: React.FC = () => {
           onExportBackup={handleExportFullBackup}
           onRestoreBackup={handleRestoreFullBackup}
           onClearAllData={handleClearAllData}
+          onClearExamsAndQuestions={handleClearExamsAndQuestions}
           onOpenCloudSync={() => setIsCloudSyncModalOpen(true)}
         />
       )}
