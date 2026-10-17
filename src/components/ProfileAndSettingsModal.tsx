@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
   Award,
+  Cloud,
   Download,
   Plus,
+  RefreshCw,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -28,6 +30,7 @@ interface ProfileAndSettingsModalProps {
   onExportBackup: () => Promise<void>;
   onRestoreBackup: (payload: FullBackupPayload) => Promise<void>;
   onClearAllData: () => Promise<void>;
+  onOpenCloudSync?: () => void;
 }
 
 const SCHOOL_TYPES: SchoolType[] = [
@@ -52,6 +55,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onExportBackup,
   onRestoreBackup,
   onClearAllData,
+  onOpenCloudSync,
 }) => {
   const [activeTab, setActiveTab] = useState<'profile' | 'backup' | 'privacy'>(
     'profile'
@@ -728,9 +732,45 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
 
           {activeTab === 'backup' && (
             <div className="space-y-4 text-xs">
+              {/* Cloud Sync Hero Card */}
+              <div className="bg-gradient-to-r from-navy-900 to-indigo-900 text-white rounded-xl p-4 space-y-3 shadow-md border border-navy-700">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 bg-turquoise-500/20 border border-turquoise-400/30 rounded-lg text-turquoise-300">
+                      <Cloud className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-white">
+                        Bulut & Cihazlar Arası Eşitleme
+                      </h4>
+                      <p className="text-[11px] text-turquoise-200">
+                        Telefonunuz, tabletiniz ve eşinizin telefonu arasında anlık köprü
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] bg-turquoise-500/20 text-turquoise-300 border border-turquoise-400/30 px-2.5 py-0.5 rounded-full font-semibold">
+                    Önerilen
+                  </span>
+                </div>
+                <p className="text-slate-300 text-xs leading-relaxed">
+                  Manuel dosya indirip yüklemeye gerek kalmadan tüm denemeleri, soru fotoğraflarını ve analizleri Firebase veya Google Drive üzerinden cihazlarınız arasında anlık eşitleyin.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose?.();
+                    onOpenCloudSync?.();
+                  }}
+                  className="px-4 py-2 bg-turquoise-500 hover:bg-turquoise-600 text-navy-950 rounded-xl font-bold flex items-center gap-2 transition-colors shadow-sm"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  <span>Bulut Eşitleme ve Cihaz Eşleştirme Ayarlarını Aç</span>
+                </button>
+              </div>
+
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
                 <h4 className="font-bold text-sm text-navy-900">
-                  Tam Yedekleme ve Geri Yükleme (Denemeler + Fotoğraflar Dahil)
+                  Manuel Dosya Yedekleme (.json)
                 </h4>
                 <p className="text-slate-600">
                   Tüm öğrenci profillerinizi, deneme sınavlarınızı, yanlış defteri fotoğraflarınızı ve çalışma planlarınızı tek bir JSON yedek dosyası olarak telefonunuza/bilgisayarınıza indirebilir ve istediğiniz zaman geri yükleyebilirsiniz.

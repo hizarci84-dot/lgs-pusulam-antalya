@@ -2,6 +2,8 @@ import { openDB, IDBPDatabase } from 'idb';
 import { ANTALYA_SCHOOL_PROGRAMS } from '../data/antalyaSchools';
 import {
   AntalyaSchoolProgram,
+  CloudSyncSettings,
+  DeletedEntityRecord,
   ExamRecord,
   QuestionPhotoAsset,
   QuestionRecord,
@@ -10,7 +12,7 @@ import {
 } from '../types/models';
 
 const DB_NAME = 'lgs-pusulam-antalya-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export interface FullBackupPayload {
   appName: 'LGS Pusulam – Antalya';
@@ -61,13 +63,29 @@ export function getDb(): Promise<IDBPDatabase> {
         if (!db.objectStoreNames.contains('appSettings')) {
           db.createObjectStore('appSettings', { keyPath: 'key' });
         }
+        if (!db.objectStoreNames.contains('deletedEntities')) {
+          db.createObjectStore('deletedEntities', { keyPath: 'id' });
+        }
       },
     });
   }
   return dbPromise;
 }
 
-// ==================== APP SETTINGS ====================
+// ==================== APP SETTINGS & CLOUD SYNC ====================
+export const DEFAULT_CLOUD_SYNC_SETTINGS: CloudSyncSettings = {
+  enabled: false,
+  provider: 'none',
+  familySyncId: '',
+  familySecretPin: '',
+  firebaseConfig: null,
+  googleScriptUrl: null,
+  autoSync: true,
+  lastSyncedAt: null,
+  lastSyncStatus: 'idle',
+  lastSyncMessage: null,
+};
+
 export async function getActiveStudentId(): Promise<string | null> {
   const db = await getDb();
   const entry = await db.get('appSettings', 'activeStudentId');
@@ -77,6 +95,47 @@ export async function getActiveStudentId(): Promise<string | null> {
 export async function setActiveStudentId(studentId: string | null): Promise<void> {
   const db = await getDb();
   await db.put('appSettings', { key: 'activeStudentId', value: studentId });
+}
+
+export async function getCloudSyncSettings(): Promise<CloudSyncSettings> {
+  const db = await getDb();
+  const entry = await db.get('appSettings', 'cloudSyncSettings');
+  return entry?.value ? { ...DEFAULT_CLOUD_SYNC_SETTINGS, ...entry.value } : DEFAULT_CLOUD_SYNC_SETTINGS;
+}
+
+export async function saveCloudSyncSettings(settings: Partial<CloudSyncSettings>): Promise<CloudSyncSettings> {
+  const current = await getCloudSyncSettings();
+  const updated: CloudSyncSettings = { ...current, ...settings };
+  const db = await getDb();
+  await db.put('appSettings', { key: 'cloudSyncSettings', value: updated });
+  return updated;
+}
+
+export async function recordDeletion(id: string, entityType: DeletedEntityRecord['entityType']): Promise<void> {
+  const db = await getDb();
+  await db.put('deletedEntities', {
+    id,
+    entityType,
+    deletedAt: new Date().toISOString(),
+  });
+}
+
+export async function getPendingDeletions(): Promise<DeletedEntityRecord[]> {
+  const db = await getDb();
+  return db.getAll('deletedEntities');
+}
+
+export async function clearPendingDeletions(ids?: string[]): Promise<void> {
+  const db = await getDb();
+  if (!ids || ids.length === 0) {
+    await db.clear('deletedEntities');
+    return;
+  }
+  const tx = db.transaction('deletedEntities', 'readwrite');
+  for (const id of ids) {
+    await tx.objectStore('deletedEntities').delete(id);
+  }
+  await tx.done;
 }
 
 // ==================== STUDENT PROFILES ====================
@@ -97,23 +156,36 @@ export async function saveStudentProfile(profile: StudentProfile): Promise<void>
 export async function deleteStudentAndAllData(studentId: string): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(
-    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans'],
+    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans', 'deletedEntities'],
     'readwrite'
   );
 
   await tx.objectStore('students').delete(studentId);
+  await tx.objectStore('deletedEntities').put({ id: studentId, entityType: 'student', deletedAt: new Date().toISOString() });
 
   const exams = await tx.objectStore('exams').index('by-student').getAllKeys(studentId);
-  for (const k of exams) await tx.objectStore('exams').delete(k);
+  for (const k of exams) {
+    await tx.objectStore('exams').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'exam', deletedAt: new Date().toISOString() });
+  }
 
   const questions = await tx.objectStore('questions').index('by-student').getAllKeys(studentId);
-  for (const k of questions) await tx.objectStore('questions').delete(k);
+  for (const k of questions) {
+    await tx.objectStore('questions').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'question', deletedAt: new Date().toISOString() });
+  }
 
   const photos = await tx.objectStore('photoAssets').index('by-student').getAllKeys(studentId);
-  for (const k of photos) await tx.objectStore('photoAssets').delete(k);
+  for (const k of photos) {
+    await tx.objectStore('photoAssets').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'photo', deletedAt: new Date().toISOString() });
+  }
 
   const plans = await tx.objectStore('studyPlans').index('by-student').getAllKeys(studentId);
-  for (const k of plans) await tx.objectStore('studyPlans').delete(k);
+  for (const k of plans) {
+    await tx.objectStore('studyPlans').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'studyPlan', deletedAt: new Date().toISOString() });
+  }
 
   await tx.done;
 }
@@ -138,14 +210,21 @@ export async function saveExamRecord(exam: ExamRecord): Promise<void> {
 
 export async function deleteExamRecord(examId: string): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['exams', 'questions', 'photoAssets'], 'readwrite');
+  const tx = db.transaction(['exams', 'questions', 'photoAssets', 'deletedEntities'], 'readwrite');
   await tx.objectStore('exams').delete(examId);
+  await tx.objectStore('deletedEntities').put({ id: examId, entityType: 'exam', deletedAt: new Date().toISOString() });
 
   const qKeys = await tx.objectStore('questions').index('by-exam').getAllKeys(examId);
-  for (const k of qKeys) await tx.objectStore('questions').delete(k);
+  for (const k of qKeys) {
+    await tx.objectStore('questions').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'question', deletedAt: new Date().toISOString() });
+  }
 
   const pKeys = await tx.objectStore('photoAssets').index('by-exam').getAllKeys(examId);
-  for (const k of pKeys) await tx.objectStore('photoAssets').delete(k);
+  for (const k of pKeys) {
+    await tx.objectStore('photoAssets').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'photo', deletedAt: new Date().toISOString() });
+  }
 
   await tx.done;
 }
@@ -176,10 +255,15 @@ export async function saveQuestionRecord(question: QuestionRecord): Promise<void
 
 export async function deleteQuestionRecord(questionId: string): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['questions', 'photoAssets'], 'readwrite');
+  const tx = db.transaction(['questions', 'photoAssets', 'deletedEntities'], 'readwrite');
   await tx.objectStore('questions').delete(questionId);
+  await tx.objectStore('deletedEntities').put({ id: questionId, entityType: 'question', deletedAt: new Date().toISOString() });
+
   const pKeys = await tx.objectStore('photoAssets').index('by-question').getAllKeys(questionId);
-  for (const k of pKeys) await tx.objectStore('photoAssets').delete(k);
+  for (const k of pKeys) {
+    await tx.objectStore('photoAssets').delete(k);
+    await tx.objectStore('deletedEntities').put({ id: String(k), entityType: 'photo', deletedAt: new Date().toISOString() });
+  }
   await tx.done;
 }
 
@@ -208,7 +292,10 @@ export async function getPhotoAssetsByQuestion(questionId: string): Promise<Ques
 
 export async function deletePhotoAsset(photoId: string): Promise<void> {
   const db = await getDb();
-  await db.delete('photoAssets', photoId);
+  const tx = db.transaction(['photoAssets', 'deletedEntities'], 'readwrite');
+  await tx.objectStore('photoAssets').delete(photoId);
+  await tx.objectStore('deletedEntities').put({ id: photoId, entityType: 'photo', deletedAt: new Date().toISOString() });
+  await tx.done;
 }
 
 // ==================== STUDY PLANS ====================
@@ -319,7 +406,7 @@ export async function restoreFromBackup(payload: FullBackupPayload): Promise<{
 export async function clearAllUserData(): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(
-    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans', 'appSettings'],
+    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans', 'appSettings', 'deletedEntities'],
     'readwrite'
   );
   await tx.objectStore('students').clear();
@@ -328,5 +415,126 @@ export async function clearAllUserData(): Promise<void> {
   await tx.objectStore('photoAssets').clear();
   await tx.objectStore('studyPlans').clear();
   await tx.objectStore('appSettings').clear();
+  await tx.objectStore('deletedEntities').clear();
   await tx.done;
 }
+
+// ==================== CLOUD SYNC DATA MERGING ====================
+export interface CloudSyncDataPayload {
+  students: StudentProfile[];
+  exams: ExamRecord[];
+  questions: QuestionRecord[];
+  photoAssets: QuestionPhotoAsset[];
+  studyPlans: WeeklyStudyPlan[];
+  deletions: DeletedEntityRecord[];
+}
+
+export async function getAllDataForSync(sinceIso?: string | null): Promise<CloudSyncDataPayload> {
+  const db = await getDb();
+  const [students, exams, questions, photoAssets, studyPlans, deletions] = await Promise.all([
+    db.getAll('students'),
+    db.getAll('exams'),
+    db.getAll('questions'),
+    db.getAll('photoAssets'),
+    db.getAll('studyPlans'),
+    db.getAll('deletedEntities'),
+  ]);
+
+  if (!sinceIso) {
+    return { students, exams, questions, photoAssets, studyPlans, deletions };
+  }
+
+  return {
+    students: students.filter((s) => (s.updatedAt || s.createdAt) > sinceIso),
+    exams: exams.filter((e) => (e.updatedAt || e.createdAt) > sinceIso),
+    questions: questions.filter((q) => (q.updatedAt || q.createdAt) > sinceIso),
+    photoAssets: photoAssets.filter((p) => p.createdAt > sinceIso),
+    studyPlans: studyPlans.filter((sp) => sp.generatedAt > sinceIso),
+    deletions: deletions.filter((d) => d.deletedAt > sinceIso),
+  };
+}
+
+export async function mergeSyncPayload(remote: Partial<CloudSyncDataPayload>): Promise<{
+  appliedStudents: number;
+  appliedExams: number;
+  appliedQuestions: number;
+  appliedPhotos: number;
+  appliedDeletions: number;
+}> {
+  const db = await getDb();
+  const tx = db.transaction(
+    ['students', 'exams', 'questions', 'photoAssets', 'studyPlans', 'deletedEntities'],
+    'readwrite'
+  );
+
+  let appliedStudents = 0;
+  let appliedExams = 0;
+  let appliedQuestions = 0;
+  let appliedPhotos = 0;
+  let appliedDeletions = 0;
+
+  // 1. Process deletions first
+  for (const del of remote.deletions || []) {
+    if (del.entityType === 'student') await tx.objectStore('students').delete(del.id);
+    else if (del.entityType === 'exam') await tx.objectStore('exams').delete(del.id);
+    else if (del.entityType === 'question') await tx.objectStore('questions').delete(del.id);
+    else if (del.entityType === 'photo') await tx.objectStore('photoAssets').delete(del.id);
+    else if (del.entityType === 'studyPlan') await tx.objectStore('studyPlans').delete(del.id);
+    appliedDeletions++;
+  }
+
+  // 2. Merge students (Last-Write-Wins based on updatedAt)
+  for (const s of remote.students || []) {
+    const existing: StudentProfile | undefined = await tx.objectStore('students').get(s.id);
+    if (!existing || (s.updatedAt || s.createdAt) > (existing.updatedAt || existing.createdAt)) {
+      await tx.objectStore('students').put(s);
+      appliedStudents++;
+    }
+  }
+
+  // 3. Merge exams
+  for (const e of remote.exams || []) {
+    const existing: ExamRecord | undefined = await tx.objectStore('exams').get(e.id);
+    if (!existing || (e.updatedAt || e.createdAt) > (existing.updatedAt || existing.createdAt)) {
+      await tx.objectStore('exams').put(e);
+      appliedExams++;
+    }
+  }
+
+  // 4. Merge questions
+  for (const q of remote.questions || []) {
+    const existing: QuestionRecord | undefined = await tx.objectStore('questions').get(q.id);
+    if (!existing || (q.updatedAt || q.createdAt) > (existing.updatedAt || existing.createdAt)) {
+      await tx.objectStore('questions').put(q);
+      appliedQuestions++;
+    }
+  }
+
+  // 5. Merge photo assets
+  for (const p of remote.photoAssets || []) {
+    const existing: QuestionPhotoAsset | undefined = await tx.objectStore('photoAssets').get(p.id);
+    if (!existing) {
+      await tx.objectStore('photoAssets').put(p);
+      appliedPhotos++;
+    }
+  }
+
+  // 6. Merge study plans
+  for (const sp of remote.studyPlans || []) {
+    const existing: WeeklyStudyPlan | undefined = await tx.objectStore('studyPlans').get(sp.id);
+    if (!existing || sp.generatedAt > existing.generatedAt) {
+      await tx.objectStore('studyPlans').put(sp);
+    }
+  }
+
+  await tx.done;
+
+  return {
+    appliedStudents,
+    appliedExams,
+    appliedQuestions,
+    appliedPhotos,
+    appliedDeletions,
+  };
+}
+

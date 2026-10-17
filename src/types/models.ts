@@ -383,3 +383,33 @@ export interface PercentileAndScoreEstimate {
   confidenceLevel: 'high' | 'medium' | 'low' | 'insufficient';
   officialResult?: StudentProfile['officialLgsResult'];
 }
+
+export type CloudProviderType = 'firebase' | 'google_script' | 'none';
+
+export interface FirebaseConfigParams {
+  apiKey: string;
+  authDomain: string;
+  projectId: string;
+  storageBucket: string;
+  messagingSenderId?: string;
+  appId: string;
+}
+
+export interface CloudSyncSettings {
+  enabled: boolean;
+  provider: CloudProviderType;
+  familySyncId: string; // e.g., "atakan-lgs-2026" or 6-digit family key
+  familySecretPin: string; // optional family PIN for shared safety
+  firebaseConfig?: FirebaseConfigParams | null;
+  googleScriptUrl?: string | null;
+  autoSync: boolean; // Auto sync on change and startup
+  lastSyncedAt: string | null;
+  lastSyncStatus: 'idle' | 'syncing' | 'success' | 'error';
+  lastSyncMessage: string | null;
+}
+
+export interface DeletedEntityRecord {
+  id: string;
+  entityType: 'student' | 'exam' | 'question' | 'photo' | 'studyPlan';
+  deletedAt: string;
+}

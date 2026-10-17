@@ -2,16 +2,19 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BarChart3,
   BookOpen,
+  Cloud,
   Compass,
   FileCheck2,
   GraduationCap,
   Home,
+  RefreshCw,
   Settings,
   User,
   Wifi,
   WifiOff,
 } from 'lucide-react';
 import { AnalyticsView } from './components/AnalyticsView';
+import { CloudSyncModal } from './components/CloudSyncModal';
 import { ExamsView } from './components/ExamsView';
 import { HomeView } from './components/HomeView';
 import { NotebookView } from './components/NotebookView';
@@ -20,8 +23,10 @@ import { QuestionDetailModal } from './components/QuestionDetailModal';
 import { QuickPhotoUploadModal } from './components/QuickPhotoUploadModal';
 import { SchoolsView } from './components/SchoolsView';
 import { computePercentileAndScoreEstimate } from './services/calculationEngine';
+import { syncWithCloud } from './services/cloudSync';
 import {
   clearAllUserData,
+  DEFAULT_CLOUD_SYNC_SETTINGS,
   deleteExamRecord,
   deleteQuestionRecord,
   deleteStudentAndAllData,
@@ -29,6 +34,7 @@ import {
   FullBackupPayload,
   getActiveStudentId,
   getAllStudents,
+  getCloudSyncSettings,
   getExamsByStudent,
   getOrSeedSchoolPrograms,
   getPhotoAssetsByStudent,
@@ -51,6 +57,7 @@ import {
 import { filterAndCompareSchools } from './services/schoolComparisonEngine';
 import {
   AntalyaSchoolProgram,
+  CloudSyncSettings,
   ExamRecord,
   QuestionPhotoAsset,
   QuestionRecord,
@@ -89,15 +96,26 @@ export const App: React.FC = () => {
     status?: 'wrong' | 'blank';
   }>({ open: false });
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState(false);
+  const [cloudSettings, setCloudSettings] = useState<CloudSyncSettings>(
+    DEFAULT_CLOUD_SYNC_SETTINGS
+  );
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
     const onOffline = () => setIsOnline(false);
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
+
+    const onSyncStatusChanged = (e: any) => {
+      if (e.detail) setCloudSettings(e.detail);
+    };
+    window.addEventListener('lgs-sync-status-changed', onSyncStatusChanged);
+
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
+      window.removeEventListener('lgs-sync-status-changed', onSyncStatusChanged);
     };
   }, []);
 
@@ -137,13 +155,15 @@ export const App: React.FC = () => {
   const initializeApp = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [studentsList, storedActiveId, schoolList] = await Promise.all([
+      const [studentsList, storedActiveId, schoolList, cs] = await Promise.all([
         getAllStudents(),
         getActiveStudentId(),
         getOrSeedSchoolPrograms(),
+        getCloudSyncSettings(),
       ]);
       setSchools(schoolList);
       setAllStudents(studentsList);
+      setCloudSettings(cs);
 
       if (studentsList.length === 0) {
         setActiveStudent(null);
@@ -155,14 +175,39 @@ export const App: React.FC = () => {
         await setActiveStudentId(chosenId);
         await loadStudentWorkspace(chosenId);
       }
+
+      // Auto-sync on startup if cloud is enabled and online
+      if (cs.enabled && cs.autoSync && navigator.onLine) {
+        syncWithCloud().catch(() => {});
+      }
     } finally {
       setIsLoading(false);
     }
   }, [loadStudentWorkspace]);
 
   useEffect(() => {
+    const onDataUpdated = () => {
+      getActiveStudentId().then((sid) => {
+        if (sid) loadStudentWorkspace(sid);
+      });
+    };
+    window.addEventListener('lgs-data-updated', onDataUpdated);
+    return () => {
+      window.removeEventListener('lgs-data-updated', onDataUpdated);
+    };
+  }, [loadStudentWorkspace]);
+
+  useEffect(() => {
     initializeApp();
   }, [initializeApp]);
+
+  const triggerBackgroundSync = useCallback(() => {
+    getCloudSyncSettings().then((cs) => {
+      if (cs.enabled && cs.autoSync && navigator.onLine) {
+        syncWithCloud().catch(() => {});
+      }
+    });
+  }, []);
 
   // Derived Real-Time Analytics
   const patternReport = useMemo(
@@ -198,6 +243,7 @@ export const App: React.FC = () => {
     await saveStudentProfile(profile);
     await setActiveStudentId(profile.id);
     await loadStudentWorkspace(profile.id);
+    triggerBackgroundSync();
   };
 
   const handleSwitchStudent = async (studentId: string) => {
@@ -209,6 +255,7 @@ export const App: React.FC = () => {
   const handleDeleteStudent = async (studentId: string) => {
     await deleteStudentAndAllData(studentId);
     await initializeApp();
+    triggerBackgroundSync();
   };
 
   const handleLoadDemoData = async () => {
@@ -221,6 +268,7 @@ export const App: React.FC = () => {
     if (activeStudent) {
       await loadStudentWorkspace(activeStudent.id);
     }
+    triggerBackgroundSync();
   };
 
   const handleDeleteExam = async (examId: string) => {
@@ -231,6 +279,7 @@ export const App: React.FC = () => {
     if (activeStudent) {
       await loadStudentWorkspace(activeStudent.id);
     }
+    triggerBackgroundSync();
   };
 
   const handleSaveQuestion = async (updated: QuestionRecord) => {
@@ -238,6 +287,7 @@ export const App: React.FC = () => {
     if (activeStudent) {
       await loadStudentWorkspace(activeStudent.id);
     }
+    triggerBackgroundSync();
   };
 
   const handleSavePhotoAsset = async (asset: QuestionPhotoAsset) => {
@@ -246,6 +296,7 @@ export const App: React.FC = () => {
       const updatedPhotos = await getPhotoAssetsByStudent(activeStudent.id);
       setPhotoAssets(updatedPhotos);
     }
+    triggerBackgroundSync();
   };
 
   const handleDeleteQuestion = async (questionId: string) => {
@@ -253,6 +304,7 @@ export const App: React.FC = () => {
     if (activeStudent) {
       await loadStudentWorkspace(activeStudent.id);
     }
+    triggerBackgroundSync();
   };
 
   const handleSaveUploadedBatch = async (
@@ -268,6 +320,7 @@ export const App: React.FC = () => {
     if (activeStudent) {
       await loadStudentWorkspace(activeStudent.id);
     }
+    triggerBackgroundSync();
   };
 
   const handleToggleStudyTask = async (taskId: string) => {
@@ -419,6 +472,40 @@ export const App: React.FC = () => {
                 </>
               )}
             </span>
+
+            {/* Cloud Sync Status Badge */}
+            <button
+              type="button"
+              onClick={() => setIsCloudSyncModalOpen(true)}
+              className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                cloudSettings.enabled
+                  ? cloudSettings.lastSyncStatus === 'syncing'
+                    ? 'bg-amber-500/20 text-amber-200 border-amber-400/40 animate-pulse'
+                    : cloudSettings.lastSyncStatus === 'error'
+                    ? 'bg-rose-500/20 text-rose-200 border-rose-400/40'
+                    : 'bg-emerald-500/20 text-emerald-200 border-emerald-400/40'
+                  : 'bg-navy-800 text-slate-300 hover:text-white border-navy-700 hover:border-navy-600'
+              }`}
+              title={
+                cloudSettings.enabled
+                  ? `Bulut Aktif (${cloudSettings.provider === 'firebase' ? 'Firebase' : 'Google Drive'}) - Tıklayıp eşitleyin veya ayarları açın`
+                  : 'Bulut eşitlemeyi aç (Telefon, tablet ve eşinizin telefonu arasında ortak senkronizasyon)'
+              }
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">
+                {cloudSettings.enabled
+                  ? cloudSettings.lastSyncStatus === 'syncing'
+                    ? 'Eşitleniyor...'
+                    : cloudSettings.lastSyncStatus === 'error'
+                    ? 'Eşitleme Hatası'
+                    : 'Bulut Aktif'
+                  : 'Bulut Eşitle'}
+              </span>
+              {cloudSettings.enabled && cloudSettings.lastSyncStatus === 'syncing' && (
+                <RefreshCw className="w-3 h-3 animate-spin text-amber-300" />
+              )}
+            </button>
 
             {/* Separate Profile, Backup & Settings Button (Section 20) */}
             <button
@@ -617,8 +704,22 @@ export const App: React.FC = () => {
           onExportBackup={handleExportFullBackup}
           onRestoreBackup={handleRestoreFullBackup}
           onClearAllData={handleClearAllData}
+          onOpenCloudSync={() => setIsCloudSyncModalOpen(true)}
         />
       )}
+
+      {/* Cloud & Multi-Device Sync Modal */}
+      <CloudSyncModal
+        isOpen={isCloudSyncModalOpen}
+        onClose={() => setIsCloudSyncModalOpen(false)}
+        onSyncComplete={() => {
+          if (activeStudent) {
+            loadStudentWorkspace(activeStudent.id);
+          } else {
+            initializeApp();
+          }
+        }}
+      />
 
       {/* Quick Photo Upload Modal */}
       {photoUploadConfig.open && activeStudent && (
