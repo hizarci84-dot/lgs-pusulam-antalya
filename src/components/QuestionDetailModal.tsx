@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Crop,
   Edit3,
+  Eraser,
   Eye,
   HelpCircle,
   History,
@@ -17,6 +18,7 @@ import {
   ZoomOut,
   AlertTriangle,
 } from 'lucide-react';
+import { ImageDaksilModal } from './ImageDaksilModal';
 import {
   CURRICULUM_TOPIC_MAP,
   ERROR_REASONS,
@@ -73,6 +75,7 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
   );
   const [rotation, setRotation] = useState<number>(activePhoto?.rotation || 0);
   const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const [isDaksilOpen, setIsDaksilOpen] = useState(false);
 
   // Editable question fields
   const [status, setStatus] = useState<'wrong' | 'blank'>(question.status);
@@ -532,6 +535,16 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
                 >
                   <Crop className="w-3.5 h-3.5" />
                   {isCropMode ? 'Kırpmayı Kapat' : 'Kırp / Yeniden Kırp'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsDaksilOpen(true)}
+                  disabled={!activePhoto}
+                  className="px-2.5 py-1 text-xs bg-violet-50 hover:bg-violet-100 text-violet-800 border border-violet-300 rounded-lg flex items-center gap-1 font-bold transition shadow-2xs"
+                  title="Sorudaki yuvarlak içine alınmış şıkkı veya karalamaları beyazlatıp temizleyin"
+                >
+                  <Eraser className="w-3.5 h-3.5 text-violet-600" />
+                  🧼 Daksil / Temizle
                 </button>
                 <label className="px-2.5 py-1 text-xs bg-turquoise-600 hover:bg-turquoise-700 text-white rounded-lg cursor-pointer flex items-center gap-1 font-medium">
                   <Camera className="w-3.5 h-3.5" />
@@ -1151,6 +1164,23 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Daksil & Karalama Silici Modal */}
+      {isDaksilOpen && activePhoto && (
+        <ImageDaksilModal
+          imageUrl={activePhoto.croppedDataUrl || activePhoto.originalDataUrl}
+          title={`Soru ${question.questionNumber ? `#${question.questionNumber}` : ''} - Karalama ve Şık Temizleme`}
+          onClose={() => setIsDaksilOpen(false)}
+          onSave={async (cleanedDataUrl) => {
+            const updatedAsset: QuestionPhotoAsset = {
+              ...activePhoto,
+              croppedDataUrl: cleanedDataUrl,
+            };
+            await onSavePhotoAsset(updatedAsset);
+            setSaveBanner('Karalamalar temizlendi ve kaydedildi. Kitapçık çıktısında bembeyaz görünecektir.');
+          }}
+        />
+      )}
     </div>
   );
 };

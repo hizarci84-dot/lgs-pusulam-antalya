@@ -232,3 +232,68 @@ export function createDemoQuestionSvgDataUrl(params: {
 
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
+
+/**
+ * Whitens the background paper, eliminates light graphite pencil scratches,
+ * and sharpens dark printed ink to create a clean, scanner-quality question image.
+ */
+export function applyDocumentWhiteningFilter(dataUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error('Görüntü filtrelenirken hata oluştu.'));
+    img.onload = () => {
+      try {
+        const width = img.naturalWidth || img.width || 800;
+        const height = img.naturalHeight || img.height || 600;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const data = imgData.data;
+
+        // Adaptive document contrast enhancement:
+        // Dark ink stays dark black, light pencil graphite and yellowish paper are lifted to pure white
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Perceived luminance
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+          if (lum >= 170) {
+            // Paper background & light pencil scratches -> Pure white
+            data[i] = 255;
+            data[i + 1] = 255;
+            data[i + 2] = 255;
+          } else if (lum <= 85) {
+            // Dark printed text & diagrams -> Deep crisp black
+            data[i] = Math.max(0, Math.round(r * 0.4));
+            data[i + 1] = Math.max(0, Math.round(g * 0.4));
+            data[i + 2] = Math.max(0, Math.round(b * 0.4));
+          } else {
+            // Smooth transition for font edges
+            const ratio = (lum - 85) / (170 - 85);
+            const enhanced = Math.round(ratio * 255);
+            data[i] = enhanced;
+            data[i + 1] = enhanced;
+            data[i + 2] = enhanced;
+          }
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+        resolve(canvas.toDataURL('image/jpeg', 0.90));
+      } catch (err: any) {
+        reject(new Error('Filtre uygulanırken hata: ' + (err?.message || '')));
+      }
+    };
+    img.src = dataUrl;
+  });
+}

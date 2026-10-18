@@ -668,6 +668,7 @@ export const App: React.FC = () => {
 
             {activeTab === 'notebook' && (
               <NotebookView
+                student={activeStudent}
                 exams={exams}
                 questions={questions}
                 photoAssets={photoAssets}

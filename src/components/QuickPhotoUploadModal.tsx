@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Check, Image as ImageIcon, Plus, RefreshCw, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
+import { Camera, Check, Eraser, Image as ImageIcon, Plus, RefreshCw, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
 import {
   ERROR_REASONS,
   LGS_SUBJECTS,
@@ -12,6 +12,7 @@ import {
   getStoredGeminiApiKey,
   saveStoredGeminiApiKey,
 } from '../services/aiVisionService';
+import { ImageDaksilModal } from './ImageDaksilModal';
 import {
   ErrorReasonCode,
   ExamRecord,
@@ -94,6 +95,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const [isApiKeyPromptOpen, setIsApiKeyPromptOpen] = useState(false);
   const [quickApiKeyInput, setQuickApiKeyInput] = useState('');
   const [pendingAiItem, setPendingAiItem] = useState<StagedQuestionItem | null>(null);
+  const [activeDaksilItem, setActiveDaksilItem] = useState<StagedQuestionItem | null>(null);
 
   const triggerAiTopicDetection = async (item: StagedQuestionItem) => {
     const key = getStoredGeminiApiKey();
@@ -863,6 +865,15 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                             <Plus className="w-3 h-3" />
                             2. Soru İçin Çoğalt
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveDaksilItem(item)}
+                            className="mt-1 text-[11px] text-violet-700 font-bold hover:underline flex items-center gap-1 bg-violet-50 hover:bg-violet-100 px-2 py-0.5 rounded border border-violet-200 transition"
+                            title="İşaretli şıkkı veya karalamaları beyazlatıp temizleyin"
+                          >
+                            <Eraser className="w-3 h-3 text-violet-600" />
+                            🧼 Daksil / Sil
+                          </button>
                         </div>
 
                         <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
@@ -1110,6 +1121,23 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Daksil & Karalama Silici Modal for staged items */}
+      {activeDaksilItem && (
+        <ImageDaksilModal
+          imageUrl={activeDaksilItem.dataUrl}
+          title="Soru Karalama ve Şık Temizleme (Daksil)"
+          onClose={() => setActiveDaksilItem(null)}
+          onSave={(cleanedUrl) => {
+            setStagedItems((prev) =>
+              prev.map((p) =>
+                p.tempId === activeDaksilItem.tempId ? { ...p, dataUrl: cleanedUrl } : p
+              )
+            );
+            setActiveDaksilItem(null);
+          }}
+        />
       )}
     </div>
   );

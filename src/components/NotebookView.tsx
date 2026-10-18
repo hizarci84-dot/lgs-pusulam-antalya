@@ -7,6 +7,7 @@ import {
   Filter,
   Layers,
   List,
+  Printer,
   RefreshCw,
 } from 'lucide-react';
 import {
@@ -27,10 +28,13 @@ import {
   LearningStatus,
   QuestionPhotoAsset,
   QuestionRecord,
+  StudentProfile,
   SubjectId,
 } from '../types/models';
+import { ExamBookletModal } from './ExamBookletModal';
 
 interface NotebookViewProps {
+  student?: StudentProfile | null;
   exams: ExamRecord[];
   questions: QuestionRecord[];
   photoAssets: QuestionPhotoAsset[];
@@ -39,12 +43,14 @@ interface NotebookViewProps {
 }
 
 export const NotebookView: React.FC<NotebookViewProps> = ({
+  student,
   exams,
   questions,
   photoAssets,
   onOpenQuestionModal,
   onQuickUploadPhoto,
 }) => {
+  const [isBookletModalOpen, setIsBookletModalOpen] = useState(false);
   // 9 Required Filters (Section 9)
   const [subjectFilter, setSubjectFilter] = useState<SubjectId | 'ALL'>('ALL');
   const [topicFilter, setTopicFilter] = useState<string>('ALL');
@@ -369,6 +375,17 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
 
           <button
             type="button"
+            disabled={filteredQuestions.length === 0}
+            onClick={() => setIsBookletModalOpen(true)}
+            className="px-3.5 py-2 bg-navy-900 hover:bg-navy-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95"
+            title="Seçili sorulardan 2 sütunlu, yazdırılabilir A4 LGS sınav kitapçığı oluşturur"
+          >
+            <Printer className="w-4 h-4 text-turquoise-400" />
+            <span>🖨️ Tekrar Kitapçığı ({filteredQuestions.length})</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onQuickUploadPhoto}
             className="px-3.5 py-2 bg-turquoise-600 hover:bg-turquoise-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs"
           >
@@ -615,6 +632,35 @@ export const NotebookView: React.FC<NotebookViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {filteredQuestions.map(renderQuestionCard)}
         </div>
+      )}
+
+      {/* Exam Booklet Print/PDF Modal */}
+      {isBookletModalOpen && (
+        <ExamBookletModal
+          student={
+            student || {
+              id: 'atakan',
+              nickname: 'Atakan',
+              gradeLevel: '8. Sınıf',
+              antalyaDistrict: 'Muratpaşa',
+              targetSchoolIds: [],
+              targetSchoolTypes: ['Fen Lisesi'],
+              targetPercentile: 1.5,
+              weeklyStudyHours: 14,
+              dailyStudyMinutes: 120,
+              boardingPreference: 'farketmez',
+              foreignLanguagePreferences: ['İngilizce'],
+              preferredDistricts: [],
+              reviewIntervalsDays: [0, 1, 3, 7],
+              createdAt: '',
+              updatedAt: '',
+            }
+          }
+          questions={filteredQuestions}
+          exams={exams}
+          photoAssets={photoAssets}
+          onClose={() => setIsBookletModalOpen(false)}
+        />
       )}
     </div>
   );
