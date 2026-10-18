@@ -10,13 +10,28 @@ export function readAndCompressImageFile(
   quality = 0.84
 ): Promise<{ dataUrl: string; width: number; height: number; mimeType: string }> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Fotoğraf dosyası okunamadı.'));
-    reader.onload = () => {
-      const resultStr = reader.result as string;
-      const img = new Image();
-      img.onerror = () => reject(new Error('Geçersiz görüntü formatı.'));
-      img.onload = () => {
+    let objectUrl = '';
+    try {
+      objectUrl = URL.createObjectURL(file);
+    } catch {
+      // Fallback to FileReader if createObjectURL fails
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Fotoğraf dosyası okunamadı.'));
+      reader.onload = () => {
+        processImageSrc(reader.result as string, resolve, reject, maxDimension, quality, file.type);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const img = new Image();
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Fotoğraf yüklenemedi veya geçersiz görüntü formatı.'));
+    };
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      try {
         let width = img.naturalWidth || img.width || 800;
         let height = img.naturalHeight || img.height || 600;
 
@@ -36,7 +51,7 @@ export function readAndCompressImageFile(
         const ctx = canvas.getContext('2d');
         if (!ctx) {
           resolve({
-            dataUrl: resultStr,
+            dataUrl: img.src,
             width,
             height,
             mimeType: file.type || 'image/jpeg',
@@ -53,11 +68,50 @@ export function readAndCompressImageFile(
           height,
           mimeType: 'image/jpeg',
         });
-      };
-      img.src = resultStr;
+      } catch (err: any) {
+        reject(new Error('Görüntü işlenirken bir bellek hatası oluştu: ' + (err?.message || '')));
+      }
     };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   });
+}
+
+function processImageSrc(
+  src: string,
+  resolve: (val: any) => void,
+  reject: (err: any) => void,
+  maxDimension: number,
+  quality: number,
+  fallbackMime: string
+) {
+  const img = new Image();
+  img.onerror = () => reject(new Error('Geçersiz görüntü formatı.'));
+  img.onload = () => {
+    let width = img.naturalWidth || img.width || 800;
+    let height = img.naturalHeight || img.height || 600;
+    if (width > maxDimension || height > maxDimension) {
+      if (width >= height) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      resolve({ dataUrl: src, width, height, mimeType: fallbackMime || 'image/jpeg' });
+      return;
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    resolve({ dataUrl: canvas.toDataURL('image/jpeg', quality), width, height, mimeType: 'image/jpeg' });
+  };
+  img.src = src;
 }
 
 /**

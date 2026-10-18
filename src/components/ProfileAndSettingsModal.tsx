@@ -12,7 +12,6 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldAlert,
-  ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
@@ -71,7 +70,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onLockSession,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'profile' | 'backup' | 'security' | 'privacy'
+    'profile' | 'backup' | 'security'
   >('profile');
   const [editingNew, setEditingNew] = useState(isFirstSetup || !activeStudent);
 
@@ -133,13 +132,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
       ? String(activeStudent.officialLgsResult.officialGeneralPercentile)
       : ''
   );
-
-  const [aiServerStatus, setAiServerStatus] = useState<{
-    configured: boolean;
-    provider: string;
-    model: string | null;
-    privacyNotice: string;
-  } | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
 
   // Security / Parent PIN state
@@ -236,21 +228,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
       );
     }
   }, [activeStudent?.id, editingNew]);
-
-  useEffect(() => {
-    fetch('/api/ai/status')
-      .then((r) => r.json())
-      .then((data) => setAiServerStatus(data))
-      .catch(() =>
-        setAiServerStatus({
-          configured: false,
-          provider: 'none',
-          model: null,
-          privacyNotice:
-            'Çevrimdışı mod aktif. Verileriniz tamamen cihazınızdaki IndexedDB veri tabanında güvenle saklanır.',
-        })
-      );
-  }, []);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -390,17 +367,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
             >
               <Lock className="w-3.5 h-3.5 text-amber-500" />
               Güvenlik & Şifre
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('privacy')}
-              className={`px-3 py-2 text-xs font-bold rounded-t-lg border-b-2 ${
-                activeTab === 'privacy'
-                  ? 'border-navy-900 text-navy-900 bg-white'
-                  : 'border-transparent text-slate-600'
-              }`}
-            >
-              Gizlilik & Yapay Zekâ
             </button>
           </div>
         )}
@@ -1005,53 +971,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   <Lock className="w-3.5 h-3.5" />
                   Hemen Kilitle & Kapat
                 </button>
-              </div>
-            </div>
-          )}
-
-          {activeTab === 'privacy' && (
-            <div className="space-y-4 text-xs">
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-2">
-                <h4 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                  <ShieldCheck className="w-5 h-5 text-emerald-600" />
-                  Veri Gizliliği ve Yerel Depolama Güvencesi
-                </h4>
-                <ul className="list-disc pl-5 space-y-1 text-slate-700">
-                  <li>
-                    Öğrencinin kimlik numarası, açık adresi veya gereksiz kişisel verileri toplanmaz; öğrenci adı dahi isteğe bağlıdır.
-                  </li>
-                  <li>
-                    Tüm deneme sonuçları, soru fotoğrafları ve çalışma planları varsayılan olarak cihazınızdaki <strong>IndexedDB</strong> yerel veri tabanında saklanır; izinsiz hiçbir üçüncü taraf sunucuya gönderilmez.
-                  </li>
-                  <li>
-                    Öğrenci fotoğrafları ile Antalya lise verileri ayrı veri depolarında (object store) izole biçimde tutulur.
-                  </li>
-                  <li>
-                    API anahtarları ön yüz (istemci) kodunda yer almaz; yalnızca sunucu tarafında (<code>.env</code>) yönetilir.
-                  </li>
-                </ul>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
-                <h4 className="font-bold text-sm text-navy-900">
-                  Yapay Zekâ Görüntü Analizi Entegrasyon Durumu
-                </h4>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2.5 py-1 rounded-lg font-bold ${
-                      aiServerStatus?.configured
-                        ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800'
-                    }`}
-                  >
-                    {aiServerStatus?.configured
-                      ? `Aktif (${aiServerStatus.provider.toUpperCase()} • ${aiServerStatus.model})`
-                      : 'Harici API Anahtarı Tanımlı Değil (Çevrimdışı / Manuel Mod Aktif)'}
-                  </span>
-                </div>
-                <p className="text-slate-600 leading-relaxed">
-                  {aiServerStatus?.privacyNotice}
-                </p>
               </div>
             </div>
           )}
