@@ -29,7 +29,11 @@ import {
   inferTopicFromText,
   resolveEffectiveTopic,
 } from '../data/curriculum';
-import { applyCropAndRotation, readAndCompressImageFile } from '../services/imageUtils';
+import {
+  applyCropAndRotation,
+  autoCleanStudentScribbles,
+  readAndCompressImageFile,
+} from '../services/imageUtils';
 import { processQuestionReviewOutcome } from '../services/patternEngine';
 import {
   analyzeFullQuestionWithGemini,
@@ -251,6 +255,25 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
       setSaveBanner('✨ ChatGPT / Gemini\'den temizlenen soru görüntüsü panodan başarıyla aktarıldı ve kaydedildi!');
     } else {
       setSaveBanner('Panoda kopyalanmış görsel bulunamadı. Lütfen ChatGPT veya Gemini\'deki temiz resme sağ tıklayıp "Resmi Kopyala" deyin, ardından tekrar basın veya Ctrl+V yapın.');
+    }
+  };
+
+  const handleAutoCleanQuestion = async () => {
+    if (!activePhoto) return;
+    setIsProcessingImage(true);
+    setSaveBanner('Kurşun kalem karalamaları ve işaretler temizleniyor...');
+    try {
+      const src = activePhoto.croppedDataUrl || activePhoto.originalDataUrl;
+      const cleaned = await autoCleanStudentScribbles(src);
+      await onSavePhotoAsset({
+        ...activePhoto,
+        croppedDataUrl: cleaned,
+      });
+      setSaveBanner('✨ Soru fotoğrafındaki karalamalar ve kurşun kalem izleri otomatik olarak temizlendi ve kaydedildi!');
+    } catch (err: any) {
+      setSaveBanner('Temizleme sırasında hata: ' + (err?.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsProcessingImage(false);
     }
   };
 
@@ -607,6 +630,16 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
                 >
                   <Crop className="w-3.5 h-3.5" />
                   {isCropMode ? 'Kırpmayı Kapat' : 'Serbest Kırp'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAutoCleanQuestion}
+                  disabled={!activePhoto || isProcessingImage}
+                  className="px-2.5 py-1 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg flex items-center gap-1 font-bold transition shadow-xs disabled:opacity-50"
+                  title="Sorudaki kurşun kalem karalamalarını, işaretlenen şıkları ve kenar notlarını tek tıkla otomatik temizler"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  🪄 Otomatik Temizle
                 </button>
                 <button
                   type="button"

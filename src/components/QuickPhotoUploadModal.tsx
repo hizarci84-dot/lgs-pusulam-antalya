@@ -5,7 +5,7 @@ import {
   LGS_SUBJECTS,
   getTopicsBySubject,
 } from '../data/curriculum';
-import { readAndCompressImageFile } from '../services/imageUtils';
+import { autoCleanStudentScribbles, readAndCompressImageFile } from '../services/imageUtils';
 import { getTodayDateStr } from '../services/patternEngine';
 import {
   detectQuestionTopicWithAi,
@@ -38,6 +38,8 @@ interface QuickPhotoUploadModalProps {
 interface StagedQuestionItem {
   tempId: string;
   dataUrl: string;
+  rawOriginalDataUrl?: string;
+  isCleaned?: boolean;
   mimeType: string;
   width: number;
   height: number;
@@ -72,12 +74,18 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Automatic Scribble & Pencil Cleaning State (Default ON)
+  const [autoCleanPencil, setAutoCleanPencil] = useState<boolean>(true);
+  const [isCleaningActive, setIsCleaningActive] = useState<boolean>(false);
+
   // Live in-app camera state
   const [isLiveCameraOpen, setIsLiveCameraOpen] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [frameSize, setFrameSize] = useState<'compact' | 'standard' | 'wide'>('compact');
   const [capturedPreview, setCapturedPreview] = useState<{
     dataUrl: string;
+    rawOriginalDataUrl?: string;
+    isCleaned?: boolean;
     width: number;
     height: number;
   } | null>(null);
@@ -264,7 +272,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     await startLiveCamera(next);
   };
 
-  const captureLivePhoto = () => {
+  const captureLivePhoto = async () => {
     const video = videoRef.current;
     const frame = frameRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) {
@@ -314,10 +322,28 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
 
       // Draw ONLY the area inside the visual question frame
       ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      const rawDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+
+      let finalDataUrl = rawDataUrl;
+      let isCleaned = false;
+
+      if (autoCleanPencil) {
+        setIsCleaningActive(true);
+        try {
+          finalDataUrl = await autoCleanStudentScribbles(rawDataUrl);
+          isCleaned = true;
+        } catch (cleanErr) {
+          console.warn('Otomatik karalama temizleme başarısız, orijinal kullanılıyor:', cleanErr);
+          finalDataUrl = rawDataUrl;
+        } finally {
+          setIsCleaningActive(false);
+        }
+      }
 
       setCapturedPreview({
-        dataUrl,
+        dataUrl: finalDataUrl,
+        rawOriginalDataUrl: rawDataUrl,
+        isCleaned,
         width: canvas.width,
         height: canvas.height,
       });
@@ -331,6 +357,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     const newItem: StagedQuestionItem = {
       tempId: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       dataUrl: capturedPreview.dataUrl,
+      rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
+      isCleaned: Boolean(capturedPreview.isCleaned),
       mimeType: 'image/jpeg',
       width: capturedPreview.width,
       height: capturedPreview.height,
@@ -371,9 +399,24 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const added: StagedQuestionItem[] = [];
       for (const file of Array.from(files)) {
         const compressed = await readAndCompressImageFile(file);
+        let finalDataUrl = compressed.dataUrl;
+        let isCleaned = false;
+
+        if (autoCleanPencil) {
+          try {
+            finalDataUrl = await autoCleanStudentScribbles(compressed.dataUrl);
+            isCleaned = true;
+          } catch (cleanErr) {
+            console.warn('Otomatik dosya temizleme atlandı:', cleanErr);
+            finalDataUrl = compressed.dataUrl;
+          }
+        }
+
         added.push({
           tempId: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          dataUrl: compressed.dataUrl,
+          dataUrl: finalDataUrl,
+          rawOriginalDataUrl: compressed.dataUrl,
+          isCleaned,
           mimeType: compressed.mimeType,
           width: compressed.width,
           height: compressed.height,
@@ -397,6 +440,34 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     } finally {
       setIsLoadingFiles(false);
       e.target.value = '';
+    }
+  };
+
+  const handleToggleCleanItem = async (item: StagedQuestionItem) => {
+    if (item.isCleaned && item.rawOriginalDataUrl) {
+      // Revert to untouched original camera photo
+      setStagedItems((prev) =>
+        prev.map((p) =>
+          p.tempId === item.tempId
+            ? { ...p, dataUrl: item.rawOriginalDataUrl!, isCleaned: false }
+            : p
+        )
+      );
+    } else {
+      // Re-run automatic pencil & scribble cleaner
+      try {
+        const src = item.rawOriginalDataUrl || item.dataUrl;
+        const cleaned = await autoCleanStudentScribbles(src);
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? { ...p, dataUrl: cleaned, rawOriginalDataUrl: src, isCleaned: true }
+              : p
+          )
+        );
+      } catch (err: any) {
+        setErrorMsg('Fotoğraf temizlenirken bir hata oluştu: ' + (err?.message || ''));
+      }
     }
   };
 
@@ -440,8 +511,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           studentId: student.id,
           examId: selectedExamId,
           questionId: qId,
-          originalDataUrl: item.dataUrl,
-          croppedDataUrl: null,
+          originalDataUrl: item.rawOriginalDataUrl || item.dataUrl,
+          croppedDataUrl: item.dataUrl,
           cropRect: null,
           rotation: 0,
           mimeType: item.mimeType,
@@ -590,6 +661,26 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                 </div>
               </div>
 
+              {/* Automatic Scribble & Pencil Cleaning Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoCleanPencil}
+                    onChange={(e) => setAutoCleanPencil(e.target.checked)}
+                    className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+                  />
+                  <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                    Fotoğraf çekilince karalamaları & işaretleri otomatik temizle (Otomatik Daksil)
+                  </span>
+                </label>
+                <span className="self-start sm:self-auto text-[11px] text-emerald-700 font-semibold bg-white border border-emerald-300 px-2.5 py-0.5 rounded-lg flex items-center gap-1">
+                  <Check className="w-3 h-3 text-emerald-600" />
+                  {autoCleanPencil ? 'Aktif (Temiz Kitapçık Modu)' : 'Kapalı'}
+                </span>
+              </div>
+
               {/* AI Auto-Detection Toggle Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-violet-50 border border-violet-200 rounded-xl px-3.5 py-2.5 text-xs">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -635,9 +726,16 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         <span className="text-turquoise-400 font-bold text-xs flex items-center justify-center gap-1.5">
                           <Check className="w-4 h-4" /> Sadece Çerçeve İçindeki Soru Kırpıldı!
                         </span>
-                        <p className="text-[11px] text-slate-300">
-                          Masa ve diğer sorular kesildi. Görüntü net ise listeye ekleyebilirsiniz.
-                        </p>
+                        {capturedPreview.isCleaned ? (
+                          <p className="text-[11px] text-emerald-300 font-bold flex items-center justify-center gap-1 mt-0.5">
+                            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                            Kurşun kalem karalamaları ve işaretlenen şıklar otomatik temizlendi.
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-slate-300">
+                            Masa ve diğer sorular kesildi. Görüntü net ise listeye ekleyebilirsiniz.
+                          </p>
+                        )}
                       </div>
 
                       <div className="max-h-[46vh] max-w-full overflow-hidden rounded-xl border border-slate-700 bg-black flex items-center justify-center p-1">
@@ -657,6 +755,27 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                           <RotateCcw className="w-3.5 h-3.5" />
                           Yeniden Çek
                         </button>
+
+                        {capturedPreview.rawOriginalDataUrl && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextCleaned = !capturedPreview.isCleaned;
+                              setCapturedPreview({
+                                ...capturedPreview,
+                                dataUrl: nextCleaned
+                                  ? capturedPreview.dataUrl
+                                  : capturedPreview.rawOriginalDataUrl!,
+                                isCleaned: nextCleaned,
+                              });
+                            }}
+                            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-slate-600 transition"
+                            title="Orijinal ve temiz hal arasında geçiş yapın"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-turquoise-400" />
+                            {capturedPreview.isCleaned ? 'Orijinali Göster' : 'Temiz Halini Göster'}
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -857,15 +976,42 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row gap-3"
                       >
                         <div className="sm:w-32 shrink-0 flex flex-col items-center">
-                          <img
-                            src={item.dataUrl}
-                            alt={`Soru ${idx + 1}`}
-                            className="w-full h-24 object-contain bg-white rounded-lg border border-slate-200"
-                          />
+                          <div className="relative w-full">
+                            <img
+                              src={item.dataUrl}
+                              alt={`Soru ${idx + 1}`}
+                              className="w-full h-24 object-contain bg-white rounded-lg border border-slate-200"
+                            />
+                            {item.isCleaned && (
+                              <span className="absolute top-1 right-1 bg-emerald-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                                <Sparkles className="w-2.5 h-2.5" /> TEMİZ
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Quick Clean / Revert Action */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCleanItem(item)}
+                            className={`mt-1.5 w-full text-[11px] font-bold flex items-center justify-center gap-1 px-2 py-0.5 rounded border transition ${
+                              item.isCleaned
+                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
+                            }`}
+                            title={
+                              item.isCleaned
+                                ? 'Temizlendi. Tıklayarak orijinal fotoğrafı görebilir veya geri alabilirsiniz.'
+                                : 'Sorudaki karalama ve kurşun kalem izlerini temizleyin.'
+                            }
+                          >
+                            <Sparkles className="w-3 h-3 text-emerald-600" />
+                            {item.isCleaned ? '✨ Temiz (Orijinale Dön)' : '🪄 Otomatik Temizle'}
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => handleDuplicateForMultiQuestionCrop(item)}
-                            className="mt-1.5 text-[11px] text-turquoise-700 font-semibold hover:underline flex items-center gap-0.5"
+                            className="mt-1 text-[11px] text-turquoise-700 font-semibold hover:underline flex items-center gap-0.5"
                             title="Bu fotoğrafta birden fazla soru varsa ayrı soru kaydı olarak çoğaltıp kırpabilirsiniz"
                           >
                             <Plus className="w-3 h-3" />
@@ -875,10 +1021,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                             type="button"
                             onClick={() => setActiveDaksilItem(item)}
                             className="mt-1 text-[11px] text-violet-700 font-bold hover:underline flex items-center gap-1 bg-violet-50 hover:bg-violet-100 px-2 py-0.5 rounded border border-violet-200 transition"
-                            title="İşaretli şıkkı veya karalamaları beyazlatıp temizleyin"
+                            title="İşaretli şıkkı veya karalamaları daksil ile elle silin"
                           >
                             <Eraser className="w-3 h-3 text-violet-600" />
-                            🧼 Daksil / Sil
+                            🧼 Daksil / İncele
                           </button>
                         </div>
 

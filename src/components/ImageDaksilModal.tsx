@@ -482,11 +482,11 @@ export const ImageDaksilModal: React.FC<ImageDaksilModalProps> = ({
             type="button"
             disabled={isApplyingFilter}
             onClick={handleApplyMagicFilter}
-            className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition"
-            title="Kağıdı otomatik beyazlatır ve açık gri kurşun kalem izlerini soldurur"
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-xs transition"
+            title="Sorudaki kurşun kalem karalamalarını, işaretlenen şıkları ve kenar notlarını otomatik temizler"
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>{isApplyingFilter ? 'İşleniyor...' : '✨ Otomatik Belge Beyazlat'}</span>
+            <span>{isApplyingFilter ? 'Temizleniyor...' : '✨ Otomatik Karalama Temizle'}</span>
           </button>
 
           {/* Undo & Reset Action Buttons */}

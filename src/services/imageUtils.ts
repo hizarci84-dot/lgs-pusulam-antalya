@@ -233,14 +233,209 @@ export function createDemoQuestionSvgDataUrl(params: {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+export interface AutoCleanOptions {
+  mode?: 'balanced' | 'aggressive' | 'gentle';
+  removeColorPen?: boolean;
+  cleanBorders?: boolean;
+}
+
 /**
- * Whitens the background paper, eliminates light graphite pencil scratches,
- * and sharpens dark printed ink to create a clean, scanner-quality question image.
+ * High-performance pure pixel cleaner for test question photos.
+ * Performs adaptive background illumination estimation, eliminates pencil graphite smudges,
+ * circles around options (A, B, C, D), student margin scribbles, and blue/red pen marks,
+ * while preserving dark printed ink, Turkish characters, punctuation, and diagrams.
  */
-export function applyDocumentWhiteningFilter(dataUrl: string): Promise<string> {
+export function cleanImageDataPixels(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  options: AutoCleanOptions = {}
+): void {
+  const mode = options.mode || 'balanced';
+  const removeColorPen = options.removeColorPen !== false;
+  const cleanBorders = options.cleanBorders !== false;
+
+  // Mode cutoffs (normalized against local background paper brightness)
+  let inkCutoff = 90;
+  let pencilCutoff = 138;
+  if (mode === 'gentle') {
+    inkCutoff = 105;
+    pencilCutoff = 158;
+  } else if (mode === 'aggressive') {
+    inkCutoff = 80;
+    pencilCutoff = 125;
+  }
+
+  // 1. Adaptive Local Background Grid (removes page shadows and yellow lighting)
+  const minDim = Math.min(width, height);
+  const blockSize = Math.max(16, Math.min(48, Math.round(minDim / 24)));
+  const gridW = Math.ceil(width / blockSize);
+  const gridH = Math.ceil(height / blockSize);
+  const bgGrid = new Float32Array(gridW * gridH);
+
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      const startX = gx * blockSize;
+      const startY = gy * blockSize;
+      const endX = Math.min(width, startX + blockSize);
+      const endY = Math.min(height, startY + blockSize);
+
+      let maxLum = 0;
+      let sumTop = 0;
+      let countTop = 0;
+
+      // First pass: locate maximum brightness in block
+      for (let y = startY; y < endY; y += 2) {
+        for (let x = startX; x < endX; x += 2) {
+          const idx = (y * width + x) * 4;
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          if (lum > maxLum) maxLum = lum;
+        }
+      }
+
+      // Second pass: average top 20% brightest pixels to estimate paper surface
+      const threshold = Math.max(120, maxLum * 0.88);
+      for (let y = startY; y < endY; y += 2) {
+        for (let x = startX; x < endX; x += 2) {
+          const idx = (y * width + x) * 4;
+          const r = data[idx];
+          const g = data[idx + 1];
+          const b = data[idx + 2];
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          if (lum >= threshold) {
+            sumTop += lum;
+            countTop++;
+          }
+        }
+      }
+
+      const blockBg = countTop > 0 ? sumTop / countTop : Math.max(180, maxLum);
+      bgGrid[gy * gridW + gx] = Math.max(130, Math.min(255, blockBg));
+    }
+  }
+
+  // 3x3 box smoothing to eliminate block boundary transitions
+  const smoothedBgGrid = new Float32Array(gridW * gridH);
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      let sum = 0;
+      let count = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const ny = gy + dy;
+          const nx = gx + dx;
+          if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH) {
+            sum += bgGrid[ny * gridW + nx];
+            count++;
+          }
+        }
+      }
+      smoothedBgGrid[gy * gridW + gx] = sum / count;
+    }
+  }
+
+  const getLocalBg = (x: number, y: number): number => {
+    const gx = x / blockSize - 0.5;
+    const gy = y / blockSize - 0.5;
+    const x0 = Math.max(0, Math.min(gridW - 1, Math.floor(gx)));
+    const y0 = Math.max(0, Math.min(gridH - 1, Math.floor(gy)));
+    const x1 = Math.max(0, Math.min(gridW - 1, x0 + 1));
+    const y1 = Math.max(0, Math.min(gridH - 1, y0 + 1));
+    const fx = Math.max(0, Math.min(1, gx - x0));
+    const fy = Math.max(0, Math.min(1, gy - y0));
+
+    const v00 = smoothedBgGrid[y0 * gridW + x0];
+    const v10 = smoothedBgGrid[y0 * gridW + x1];
+    const v01 = smoothedBgGrid[y1 * gridW + x0];
+    const v11 = smoothedBgGrid[y1 * gridW + x1];
+
+    const top = v00 * (1 - fx) + v10 * fx;
+    const bot = v01 * (1 - fx) + v11 * fx;
+    return top * (1 - fy) + bot * fy;
+  };
+
+  // 2. Pixel Transformation Pass
+  const borderMargin = cleanBorders ? Math.max(2, Math.round(minDim * 0.006)) : 0;
+
+  for (let y = 0; y < height; y++) {
+    const isBorderY = cleanBorders && (y < borderMargin || y >= height - borderMargin);
+
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+
+      if (isBorderY || (cleanBorders && (x < borderMargin || x >= width - borderMargin))) {
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        continue;
+      }
+
+      const r = data[idx];
+      const g = data[idx + 1];
+      const b = data[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+      // Colored ballpoint pen / highlighter detection (blue, red, green student ink)
+      if (removeColorPen) {
+        const maxC = Math.max(r, g, b);
+        const minC = Math.min(r, g, b);
+        const chroma = maxC - minC;
+
+        if (chroma > 24 && lum > 60) {
+          data[idx] = 255;
+          data[idx + 1] = 255;
+          data[idx + 2] = 255;
+          continue;
+        }
+      }
+
+      const localBg = getLocalBg(x, y);
+      const relLum = Math.min(255, (lum / Math.max(1, localBg)) * 255);
+
+      if (relLum >= pencilCutoff) {
+        // Paper background, pencil graphite, circled answers, underlines -> PURE WHITE
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+      } else if (relLum <= inkCutoff) {
+        // Printed text & diagrams -> DEEP CRISP CONTRAST
+        const inkFactor = relLum / inkCutoff;
+        const dark = Math.round(inkFactor * 28);
+        data[idx] = dark;
+        data[idx + 1] = Math.round(dark * 1.05);
+        data[idx + 2] = Math.round(dark * 1.15);
+      } else {
+        // Anti-aliased font transition
+        const t = (relLum - inkCutoff) / (pencilCutoff - inkCutoff);
+        const smoothVal = Math.round(28 + Math.pow(t, 1.4) * (255 - 28));
+        data[idx] = smoothVal;
+        data[idx + 1] = smoothVal;
+        data[idx + 2] = smoothVal;
+      }
+    }
+  }
+}
+
+/**
+ * Automatically cleans student pencil marks, circled options, margin scribbles,
+ * and page shadows from a question photo to produce a clean, scanner-quality question image.
+ */
+export function autoCleanStudentScribbles(
+  dataUrl: string,
+  options: AutoCleanOptions = {}
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      resolve(dataUrl);
+      return;
+    }
+
     const img = new Image();
-    img.onerror = () => reject(new Error('Görüntü filtrelenirken hata oluştu.'));
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => reject(new Error('Soru fotoğrafı temizlenirken yüklenemedi.'));
     img.onload = () => {
       try {
         const width = img.naturalWidth || img.width || 800;
@@ -254,46 +449,29 @@ export function applyDocumentWhiteningFilter(dataUrl: string): Promise<string> {
           return;
         }
 
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
+
         const imgData = ctx.getImageData(0, 0, width, height);
-        const data = imgData.data;
-
-        // Adaptive document contrast enhancement:
-        // Dark ink stays dark black, light pencil graphite and yellowish paper are lifted to pure white
-        for (let i = 0; i < data.length; i += 4) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-
-          // Perceived luminance
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-
-          if (lum >= 170) {
-            // Paper background & light pencil scratches -> Pure white
-            data[i] = 255;
-            data[i + 1] = 255;
-            data[i + 2] = 255;
-          } else if (lum <= 85) {
-            // Dark printed text & diagrams -> Deep crisp black
-            data[i] = Math.max(0, Math.round(r * 0.4));
-            data[i + 1] = Math.max(0, Math.round(g * 0.4));
-            data[i + 2] = Math.max(0, Math.round(b * 0.4));
-          } else {
-            // Smooth transition for font edges
-            const ratio = (lum - 85) / (170 - 85);
-            const enhanced = Math.round(ratio * 255);
-            data[i] = enhanced;
-            data[i + 1] = enhanced;
-            data[i + 2] = enhanced;
-          }
-        }
-
+        cleanImageDataPixels(imgData.data, width, height, options);
         ctx.putImageData(imgData, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 0.90));
+
+        const cleanedDataUrl = canvas.toDataURL('image/jpeg', 0.90);
+        resolve(cleanedDataUrl);
       } catch (err: any) {
-        reject(new Error('Filtre uygulanırken hata: ' + (err?.message || '')));
+        reject(new Error('Otomatik karalama temizleme sırasında hata: ' + (err?.message || '')));
       }
     };
     img.src = dataUrl;
   });
+}
+
+/**
+ * Whitens the background paper, eliminates light graphite pencil scratches,
+ * and sharpens dark printed ink to create a clean, scanner-quality question image.
+ * Uses autoCleanStudentScribbles internally for superior adaptive illumination.
+ */
+export function applyDocumentWhiteningFilter(dataUrl: string): Promise<string> {
+  return autoCleanStudentScribbles(dataUrl, { mode: 'balanced', removeColorPen: true, cleanBorders: true });
 }
