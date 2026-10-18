@@ -154,7 +154,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             className="bg-white/12 hover:bg-white/20 text-white font-semibold text-xs p-2.5 rounded-xl flex items-center justify-center gap-1.5 border border-white/15 transition"
           >
             <Camera className="w-4 h-4 text-turquoise-300 shrink-0" />
-            <span>Yanlış Fotoğrafı Yükle</span>
+            <span>Yanlış ve Boş Fotoğrafı Yükle</span>
           </button>
 
           <button
