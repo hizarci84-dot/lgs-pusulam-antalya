@@ -7,6 +7,7 @@ import {
   ExamRecord,
   QuestionPhotoAsset,
   QuestionRecord,
+  SecuritySettings,
   StudentProfile,
   WeeklyStudyPlan,
 } from '../types/models';
@@ -109,6 +110,26 @@ export async function saveCloudSyncSettings(settings: Partial<CloudSyncSettings>
   const updated: CloudSyncSettings = { ...current, ...settings };
   const db = await getDb();
   await db.put('appSettings', { key: 'cloudSyncSettings', value: updated });
+  return updated;
+}
+
+export const DEFAULT_SECURITY_SETTINGS: SecuritySettings = {
+  isPinProtected: true,
+  pin: '2026',
+  sessionTimeoutMinutes: 15,
+};
+
+export async function getSecuritySettings(): Promise<SecuritySettings> {
+  const db = await getDb();
+  const entry = await db.get('appSettings', 'securitySettings');
+  return entry?.value ? { ...DEFAULT_SECURITY_SETTINGS, ...entry.value } : DEFAULT_SECURITY_SETTINGS;
+}
+
+export async function saveSecuritySettings(settings: Partial<SecuritySettings>): Promise<SecuritySettings> {
+  const current = await getSecuritySettings();
+  const updated: SecuritySettings = { ...current, ...settings };
+  const db = await getDb();
+  await db.put('appSettings', { key: 'securitySettings', value: updated });
   return updated;
 }
 

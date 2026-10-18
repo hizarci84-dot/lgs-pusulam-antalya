@@ -413,3 +413,9 @@ export interface DeletedEntityRecord {
   entityType: 'student' | 'exam' | 'question' | 'photo' | 'studyPlan';
   deletedAt: string;
 }
+
+export interface SecuritySettings {
+  isPinProtected: boolean;
+  pin: string; // 4-digit PIN, default '2026'
+  sessionTimeoutMinutes: number; // default 15 mins
+}

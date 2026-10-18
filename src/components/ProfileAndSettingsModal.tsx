@@ -1,10 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import {
   Award,
+  CheckCircle2,
   Cloud,
   Download,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Lock,
   Plus,
   RefreshCw,
+  RotateCcw,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -15,8 +22,12 @@ import {
 } from 'lucide-react';
 import { ANTALYA_DISTRICTS } from '../data/curriculum';
 import { ANTALYA_SCHOOL_PROGRAMS } from '../data/antalyaSchools';
-import { FullBackupPayload } from '../services/db';
-import { SchoolType, StudentProfile } from '../types/models';
+import {
+  FullBackupPayload,
+  getSecuritySettings,
+  saveSecuritySettings,
+} from '../services/db';
+import { SchoolType, SecuritySettings, StudentProfile } from '../types/models';
 
 interface ProfileAndSettingsModalProps {
   isFirstSetup?: boolean;
@@ -31,6 +42,7 @@ interface ProfileAndSettingsModalProps {
   onClearAllData: () => Promise<void>;
   onClearExamsAndQuestions?: () => Promise<void>;
   onOpenCloudSync?: () => void;
+  onLockSession?: () => void;
 }
 
 const SCHOOL_TYPES: SchoolType[] = [
@@ -56,10 +68,11 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onClearAllData,
   onClearExamsAndQuestions,
   onOpenCloudSync,
+  onLockSession,
 }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'backup' | 'privacy'>(
-    'profile'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'profile' | 'backup' | 'security' | 'privacy'
+  >('profile');
   const [editingNew, setEditingNew] = useState(isFirstSetup || !activeStudent);
 
   const [nickname, setNickname] = useState(activeStudent?.nickname || '');
@@ -128,6 +141,71 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
     privacyNotice: string;
   } | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
+
+  // Security / Parent PIN state
+  const [securitySettings, setSecuritySettings] = useState<SecuritySettings>({
+    isPinProtected: true,
+    pin: '2026',
+    sessionTimeoutMinutes: 15,
+  });
+  const [newPin, setNewPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [showNewPin, setShowNewPin] = useState(false);
+  const [pinChangeMsg, setPinChangeMsg] = useState<{
+    success: boolean;
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    getSecuritySettings().then((s) => setSecuritySettings(s));
+  }, []);
+
+  const handleUpdatePin = async () => {
+    if (!/^\d{4}$/.test(newPin)) {
+      setPinChangeMsg({
+        success: false,
+        text: 'Yeni şifre tam olarak 4 haneli rakam (Örn: 2026) olmalıdır.',
+      });
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinChangeMsg({
+        success: false,
+        text: 'Girdiğiniz şifreler birbiriyle eşleşmiyor. Lütfen kontrol ediniz.',
+      });
+      return;
+    }
+    const updated = await saveSecuritySettings({ pin: newPin, isPinProtected: true });
+    setSecuritySettings(updated);
+    setNewPin('');
+    setConfirmPin('');
+    setPinChangeMsg({
+      success: true,
+      text: `Ebeveyn şifresi başarıyla "${newPin}" olarak güncellendi.`,
+    });
+  };
+
+  const handleTogglePinProtection = async (enabled: boolean) => {
+    const updated = await saveSecuritySettings({ isPinProtected: enabled });
+    setSecuritySettings(updated);
+    setPinChangeMsg({
+      success: true,
+      text: enabled
+        ? 'Ebeveyn şifre koruması aktif edildi.'
+        : 'Şifre koruması kapatıldı (Doğrudan giriş açık).',
+    });
+  };
+
+  const handleResetPinToDefault = async () => {
+    const updated = await saveSecuritySettings({ pin: '2026', isPinProtected: true });
+    setSecuritySettings(updated);
+    setNewPin('');
+    setConfirmPin('');
+    setPinChangeMsg({
+      success: true,
+      text: 'Şifreniz varsayılan "2026" olarak sıfırlandı.',
+    });
+  };
 
   useEffect(() => {
     if (activeStudent && !editingNew) {
@@ -303,6 +381,18 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
             </button>
             <button
               type="button"
+              onClick={() => setActiveTab('security')}
+              className={`px-3 py-2 text-xs font-bold rounded-t-lg border-b-2 flex items-center gap-1.5 ${
+                activeTab === 'security'
+                  ? 'border-navy-900 text-navy-900 bg-white'
+                  : 'border-transparent text-slate-600'
+              }`}
+            >
+              <Lock className="w-3.5 h-3.5 text-amber-500" />
+              Güvenlik & Şifre
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveTab('privacy')}
               className={`px-3 py-2 text-xs font-bold rounded-t-lg border-b-2 ${
                 activeTab === 'privacy'
@@ -310,7 +400,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   : 'border-transparent text-slate-600'
               }`}
             >
-              Gizlilik & Yapay Zekâ Durumu
+              Gizlilik & Yapay Zekâ
             </button>
           </div>
         )}
@@ -822,6 +912,168 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                 >
                   <Trash2 className="w-4 h-4" />
                   Tüm Kullanıcı Verilerini Sil
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'security' && (
+            <div className="space-y-4 text-xs">
+              {/* Status & Feedback alert */}
+              {pinChangeMsg && (
+                <div
+                  className={`p-3 rounded-xl border flex items-center gap-2 ${
+                    pinChangeMsg.success
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  {pinChangeMsg.success ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  ) : (
+                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                  )}
+                  <span>{pinChangeMsg.text}</span>
+                </div>
+              )}
+
+              {/* Protection Toggle Card */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-amber-100 text-amber-700 rounded-xl">
+                      <Lock className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-navy-900">
+                        Ebeveyn / Yönetici Şifre Koruması
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Profil, hedef lise belirleme, veri sıfırlama ve yedekleme alanına girişte şifre sorulsun.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={securitySettings.isPinProtected}
+                      onChange={(e) => handleTogglePinProtection(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-[11px] text-slate-600">
+                  <span>
+                    Mevcut Durum:{' '}
+                    <strong className={securitySettings.isPinProtected ? 'text-emerald-700' : 'text-slate-500'}>
+                      {securitySettings.isPinProtected ? 'Aktif (Korumalı)' : 'Devre Dışı (Korumasız)'}
+                    </strong>
+                  </span>
+                  <span>
+                    Aktif PIN:{' '}
+                    <span className="font-mono bg-white px-2 py-0.5 rounded border border-slate-200 font-bold text-navy-900">
+                      {securitySettings.pin || '2026'}
+                    </span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Change PIN Card */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+                <h4 className="font-bold text-sm text-navy-900 flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-turquoise-600" />
+                  Ebeveyn Şifresini Değiştir
+                </h4>
+                <p className="text-slate-600 text-[11px]">
+                  Atakan'ın veya başkalarının ayarları değiştirmesini önlemek için 4 haneli yeni bir PIN belirleyebilirsiniz.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Yeni 4 Haneli Şifre
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showNewPin ? 'text' : 'password'}
+                        maxLength={4}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="Örn: 2026"
+                        value={newPin}
+                        onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                        className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-turquoise-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPin(!showNewPin)}
+                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                      >
+                        {showNewPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Yeni Şifre (Tekrar)
+                    </label>
+                    <input
+                      type={showNewPin ? 'text' : 'password'}
+                      maxLength={4}
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Tekrar giriniz"
+                      value={confirmPin}
+                      onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-xl focus:ring-2 focus:ring-turquoise-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetPinToDefault}
+                    className="text-xs text-slate-500 hover:text-slate-800 underline flex items-center gap-1"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Varsayılan Şifreye Dön (2026)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleUpdatePin}
+                    disabled={newPin.length !== 4 || confirmPin.length !== 4}
+                    className="px-4 py-2 bg-navy-900 hover:bg-navy-800 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1.5 transition shadow-sm"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-turquoise-400" />
+                    Şifreyi Kaydet
+                  </button>
+                </div>
+              </div>
+
+              {/* Instant Lock Option */}
+              <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 flex items-center justify-between">
+                <div>
+                  <h5 className="font-bold text-xs text-amber-950">Ayarlar Panelini Şimdi Kilitle</h5>
+                  <p className="text-[11px] text-amber-800">
+                    Pencereyi kapatıp bir sonraki girişte hemen şifre sorulmasını sağlar.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onLockSession?.();
+                    onClose?.();
+                  }}
+                  className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition text-xs shrink-0"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  Hemen Kilitle & Kapat
                 </button>
               </div>
             </div>

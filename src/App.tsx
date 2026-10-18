@@ -7,6 +7,7 @@ import {
   FileCheck2,
   GraduationCap,
   Home,
+  Lock,
   RefreshCw,
   Settings,
   User,
@@ -18,6 +19,7 @@ import { CloudSyncModal } from './components/CloudSyncModal';
 import { ExamsView } from './components/ExamsView';
 import { HomeView } from './components/HomeView';
 import { NotebookView } from './components/NotebookView';
+import { ParentPinModal } from './components/ParentPinModal';
 import { ProfileAndSettingsModal } from './components/ProfileAndSettingsModal';
 import { QuestionDetailModal } from './components/QuestionDetailModal';
 import { QuickPhotoUploadModal } from './components/QuickPhotoUploadModal';
@@ -40,6 +42,7 @@ import {
   getOrSeedSchoolPrograms,
   getPhotoAssetsByStudent,
   getQuestionsByStudent,
+  getSecuritySettings,
   getStudyPlanByStudent,
   purgeAllDemoData,
   restoreFromBackup,
@@ -97,10 +100,47 @@ export const App: React.FC = () => {
     status?: 'wrong' | 'blank';
   }>({ open: false });
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isParentPinModalOpen, setIsParentPinModalOpen] = useState(false);
+  const [isParentSessionUnlocked, setIsParentSessionUnlocked] = useState(false);
+  const [lastParentUnlockTime, setLastParentUnlockTime] = useState<number | null>(null);
   const [isCloudSyncModalOpen, setIsCloudSyncModalOpen] = useState(false);
   const [cloudSettings, setCloudSettings] = useState<CloudSyncSettings>(
     DEFAULT_CLOUD_SYNC_SETTINGS
   );
+
+  const handleOpenProfileClick = async () => {
+    if (!activeStudent) {
+      setIsProfileModalOpen(true);
+      return;
+    }
+
+    const sec = await getSecuritySettings();
+    if (!sec.isPinProtected) {
+      setIsProfileModalOpen(true);
+      return;
+    }
+
+    const now = Date.now();
+    const timeoutMs = (sec.sessionTimeoutMinutes || 15) * 60 * 1000;
+    if (isParentSessionUnlocked && lastParentUnlockTime && now - lastParentUnlockTime < timeoutMs) {
+      setIsProfileModalOpen(true);
+      return;
+    }
+
+    setIsParentPinModalOpen(true);
+  };
+
+  const handleParentPinSuccess = () => {
+    setIsParentPinModalOpen(false);
+    setIsParentSessionUnlocked(true);
+    setLastParentUnlockTime(Date.now());
+    setIsProfileModalOpen(true);
+  };
+
+  const handleLockParentSession = () => {
+    setIsParentSessionUnlocked(false);
+    setLastParentUnlockTime(null);
+  };
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -545,16 +585,18 @@ export const App: React.FC = () => {
               )}
             </button>
 
-            {/* Separate Profile, Backup & Settings Button (Section 20) */}
+            {/* Separate Profile, Backup & Settings Button (Protected by Parent PIN) */}
             <button
               type="button"
-              onClick={() => setIsProfileModalOpen(true)}
+              onClick={handleOpenProfileClick}
               className="px-3 py-1.5 rounded-xl bg-navy-800 hover:bg-navy-700 border border-navy-700 text-xs font-bold flex items-center gap-1.5 transition"
+              title="Öğrenci Profili, Hedefler ve Ayarlar (Ebeveyn Şifresi Korumalı)"
             >
               <User className="w-3.5 h-3.5 text-turquoise-300" />
               <span className="max-w-[110px] truncate">
                 {activeStudent?.nickname || 'Öğrenci Profili'}
               </span>
+              <Lock className="w-3 h-3 text-amber-400" />
               <Settings className="w-3.5 h-3.5 text-slate-300" />
             </button>
           </div>
@@ -727,6 +769,14 @@ export const App: React.FC = () => {
         </div>
       </nav>
 
+      {/* Parent / Admin PIN Security Modal */}
+      <ParentPinModal
+        isOpen={isParentPinModalOpen}
+        onClose={() => setIsParentPinModalOpen(false)}
+        onSuccess={handleParentPinSuccess}
+        studentName={activeStudent?.nickname || 'Atakan'}
+      />
+
       {/* First-Time Student Setup OR Profile/Backup/Settings Modal */}
       {(!activeStudent || isProfileModalOpen) && (
         <ProfileAndSettingsModal
@@ -742,6 +792,7 @@ export const App: React.FC = () => {
           onClearAllData={handleClearAllData}
           onClearExamsAndQuestions={handleClearExamsAndQuestions}
           onOpenCloudSync={() => setIsCloudSyncModalOpen(true)}
+          onLockSession={handleLockParentSession}
         />
       )}
 
