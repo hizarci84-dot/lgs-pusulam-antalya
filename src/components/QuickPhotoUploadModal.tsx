@@ -45,6 +45,7 @@ interface StagedQuestionItem {
   status: 'wrong' | 'blank';
   questionNumber: string;
   topicId: string;
+  subtopicName: string;
   errorReason: ErrorReasonCode | '';
   studentNote: string;
 }
@@ -87,7 +88,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   // AI Topic Detection State
   const [loadingAiTempId, setLoadingAiTempId] = useState<string | null>(null);
   const [aiDetectionResult, setAiDetectionResult] = useState<{
-    [tempId: string]: { topicName: string; confidence: number };
+    [tempId: string]: { topicName: string; subtopicName: string; confidence: number };
   }>({});
   const [autoAiDetect, setAutoAiDetect] = useState<boolean>(() =>
     Boolean(getStoredGeminiApiKey())
@@ -120,6 +121,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               ? {
                   ...p,
                   topicId: res.topicId!,
+                  subtopicName: res.subtopicName || '',
                   studentNote:
                     p.studentNote ||
                     (res.subtopicName ? `Kazanım: ${res.subtopicName}` : ''),
@@ -131,6 +133,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           ...prev,
           [item.tempId]: {
             topicName: res.topicName || '',
+            subtopicName: res.subtopicName || '',
             confidence: res.confidence || 90,
           },
         }));
@@ -335,6 +338,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       status: batchStatus,
       questionNumber: '',
       topicId: '',
+      subtopicName: '',
       errorReason: '',
       studentNote: '',
     };
@@ -377,6 +381,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           status: batchStatus,
           questionNumber: '',
           topicId: '',
+          subtopicName: '',
           errorReason: '',
           studentNote: '',
         });
@@ -402,6 +407,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         ...item,
         tempId: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         questionNumber: '',
+        subtopicName: item.subtopicName || '',
         studentNote: 'Aynı fotoğraftaki diğer soru (Kaydettikten sonra kırpabilirsiniz)',
       },
     ]);
@@ -455,7 +461,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           userTopicId: item.topicId || null,
           aiSuggestedTopicId: null,
           inferredTopicId: null,
-          subtopicName: '',
+          subtopicName: (item.subtopicName || '').trim(),
           topicVerifiedByUser: Boolean(item.topicId),
           studentAnswer: '',
           correctAnswer: '',
@@ -977,9 +983,19 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               value={item.topicId}
                               onChange={(e) => {
                                 const val = e.target.value;
+                                const selectedT = topics.find((t) => t.id === val);
                                 setStagedItems((prev) =>
                                   prev.map((p) =>
-                                    p.tempId === item.tempId ? { ...p, topicId: val } : p
+                                    p.tempId === item.tempId
+                                      ? {
+                                          ...p,
+                                          topicId: val,
+                                          subtopicName:
+                                            selectedT && selectedT.subtopics.length > 0
+                                              ? selectedT.subtopics[0]
+                                              : '',
+                                        }
+                                      : p
                                   )
                                 );
                               }}
@@ -992,11 +1008,74 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                                 </option>
                               ))}
                             </select>
+
+                            {/* Alt Konu / Kazanım Seçici */}
+                            {item.topicId && (() => {
+                              const currTopic = topics.find((t) => t.id === item.topicId);
+                              if (currTopic && currTopic.subtopics.length > 0) {
+                                return (
+                                  <div className="mt-1.5">
+                                    <label className="block text-[10px] text-slate-500 mb-0.5">
+                                      Alt Konu / Kazanım (MEB)
+                                    </label>
+                                    <select
+                                      value={item.subtopicName}
+                                      onChange={(e) => {
+                                        const subVal = e.target.value;
+                                        setStagedItems((prev) =>
+                                          prev.map((p) =>
+                                            p.tempId === item.tempId
+                                              ? { ...p, subtopicName: subVal }
+                                              : p
+                                          )
+                                        );
+                                      }}
+                                      className="w-full border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 text-xs"
+                                    >
+                                      <option value="">-- Kazanım Seçin --</option>
+                                      {currTopic.subtopics.map((st) => (
+                                        <option key={st} value={st}>
+                                          {st}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <div className="mt-1.5">
+                                  <label className="block text-[10px] text-slate-500 mb-0.5">
+                                    Alt Konu / Kazanım (İsteğe Bağlı)
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="Örn: Üslü sayılarda çarpma..."
+                                    value={item.subtopicName}
+                                    onChange={(e) => {
+                                      const subVal = e.target.value;
+                                      setStagedItems((prev) =>
+                                        prev.map((p) =>
+                                          p.tempId === item.tempId
+                                            ? { ...p, subtopicName: subVal }
+                                            : p
+                                        )
+                                      );
+                                    }}
+                                    className="w-full border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 text-xs"
+                                  />
+                                </div>
+                              );
+                            })()}
+
                             {aiDetectionResult[item.tempId] && (
-                              <div className="mt-1 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 flex items-center gap-1.5 font-semibold">
+                              <div className="mt-1.5 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 flex items-center gap-1.5 font-semibold">
                                 <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                 <span>
-                                  Yapay Zekâ Belirledi: {aiDetectionResult[item.tempId].topicName} (%{aiDetectionResult[item.tempId].confidence} güven)
+                                  ✨ Yapay Zekâ: {aiDetectionResult[item.tempId].topicName}
+                                  {aiDetectionResult[item.tempId].subtopicName && (
+                                    <> • Kazanım: {aiDetectionResult[item.tempId].subtopicName}</>
+                                  )}{' '}
+                                  (%{aiDetectionResult[item.tempId].confidence} güven)
                                 </span>
                               </div>
                             )}

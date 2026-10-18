@@ -18,6 +18,7 @@ import {
   ZoomOut,
   AlertTriangle,
 } from 'lucide-react';
+import { FreehandImageCropper } from './FreehandImageCropper';
 import { ImageDaksilModal } from './ImageDaksilModal';
 import {
   CURRICULUM_TOPIC_MAP,
@@ -127,6 +128,8 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
   // Review state
   const [reviewNote, setReviewNote] = useState('');
   const [saveBanner, setSaveBanner] = useState<string | null>(null);
+  const [isSavingChanges, setIsSavingChanges] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   useEffect(() => {
     if (activePhoto) {
@@ -297,12 +300,18 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
       if (analysis.solutionSteps?.length > 0 && !solutionExplanation) {
         setSolutionExplanation(analysis.solutionSteps.join(' '));
       }
-      if (analysis.suggestedSubtopicName && !subtopicName) {
+      if (analysis.suggestedTopicId) {
+        setUserTopicId(analysis.suggestedTopicId);
+        setTopicVerified(true);
+      }
+      if (analysis.suggestedSubtopicName) {
         setSubtopicName(analysis.suggestedSubtopicName);
       }
 
       const updated: QuestionRecord = {
         ...question,
+        userTopicId: analysis.suggestedTopicId || userTopicId || question.userTopicId,
+        topicVerifiedByUser: true,
         aiSuggestedTopicId: analysis.suggestedTopicId || question.aiSuggestedTopicId,
         subtopicName: analysis.suggestedSubtopicName || subtopicName,
         correctAnswer:
@@ -314,6 +323,7 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
         isAnalyzed: true,
         aiAnalysis: {
           ...analysis,
+          suggestedSubtopicName: analysis.suggestedSubtopicName || subtopicName,
           providerName: result.analysis.providerName || 'gemini',
           modelUsed: result.analysis.modelUsed || 'gemini',
         },
@@ -321,7 +331,7 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
 
       await onSaveQuestion(updated);
       setAiStatusMessage(
-        `Yapay zekâ analizi tamamlandı (%${analysis.confidence || 90} güven). Önerilen konu etiketini aşağıdan doğrulayabilir veya değiştirebilirsiniz.`
+        `Yapay zekâ analizi tamamlandı (%${analysis.confidence || 90} güven). Konu: "${analysis.suggestedTopicName || ''}" • Kazanım: "${analysis.suggestedSubtopicName || ''}" otomatik belirlendi ve kaydedildi.`
       );
     } catch (err: any) {
       setAiError(
@@ -350,67 +360,79 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
   };
 
   const handleSaveChanges = async () => {
-    const inferred = inferTopicFromText(
-      question.subjectId,
-      `${extractedText} ${studentNote}`
-    );
+    setIsSavingChanges(true);
+    setSaveSuccess(false);
+    try {
+      const inferred = inferTopicFromText(
+        question.subjectId,
+        `${extractedText} ${studentNote}`
+      );
 
-    const updated: QuestionRecord = {
-      ...question,
-      status,
-      questionNumber: questionNumber ? Number(questionNumber) : null,
-      userTopicId: userTopicId || null,
-      inferredTopicId: inferred.topicId || question.inferredTopicId,
-      subtopicName,
-      topicVerifiedByUser: Boolean(userTopicId) ? true : topicVerified,
-      studentAnswer,
-      correctAnswer,
-      errorReason: errorReason ? (errorReason as ErrorReasonCode) : null,
-      studentNote,
-      solutionExplanation,
-      isAnalyzed: Boolean(
-        userTopicId || solutionExplanation || extractedText || errorReason
-      ),
-      aiAnalysis: {
-        isReadable: true,
-        extractedText,
-        visualDescription:
-          question.aiAnalysis?.visualDescription || 'Kullanıcı tarafından kaydedildi.',
-        suggestedTopicId:
-          question.aiSuggestedTopicId || userTopicId || inferred.topicId || null,
-        suggestedTopicName:
-          (userTopicId && CURRICULUM_TOPIC_MAP[userTopicId]?.topicName) ||
-          question.aiAnalysis?.suggestedTopicName ||
-          'Konu belirlenmedi',
-        suggestedSubtopicName: subtopicName,
-        confidence: question.aiAnalysis?.confidence || 90,
-        candidateTopics: question.aiAnalysis?.candidateTopics || [],
-        correctAnswer: correctAnswer || 'Belirlenemedi',
-        solutionSteps: solutionStepsText
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        commonMistakes: commonMistakesText
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        similarPracticeQuestion: {
-          questionText: practiceQuestionText,
-          options:
-            question.aiAnalysis?.similarPracticeQuestion?.options || [],
-          correctOption:
-            question.aiAnalysis?.similarPracticeQuestion?.correctOption || '',
-          shortSolution:
-            question.aiAnalysis?.similarPracticeQuestion?.shortSolution || '',
+      const updated: QuestionRecord = {
+        ...question,
+        status,
+        questionNumber: questionNumber ? Number(questionNumber) : null,
+        userTopicId: userTopicId || null,
+        inferredTopicId: inferred.topicId || question.inferredTopicId,
+        subtopicName,
+        topicVerifiedByUser: Boolean(userTopicId) ? true : topicVerified,
+        studentAnswer,
+        correctAnswer,
+        errorReason: errorReason ? (errorReason as ErrorReasonCode) : null,
+        studentNote,
+        solutionExplanation,
+        isAnalyzed: Boolean(
+          userTopicId || solutionExplanation || extractedText || errorReason
+        ),
+        aiAnalysis: {
+          isReadable: true,
+          extractedText,
+          visualDescription:
+            question.aiAnalysis?.visualDescription || 'Kullanıcı tarafından kaydedildi.',
+          suggestedTopicId:
+            question.aiSuggestedTopicId || userTopicId || inferred.topicId || null,
+          suggestedTopicName:
+            (userTopicId && CURRICULUM_TOPIC_MAP[userTopicId]?.topicName) ||
+            question.aiAnalysis?.suggestedTopicName ||
+            'Konu belirlenmedi',
+          suggestedSubtopicName: subtopicName,
+          confidence: question.aiAnalysis?.confidence || 90,
+          candidateTopics: question.aiAnalysis?.candidateTopics || [],
+          correctAnswer: correctAnswer || 'Belirlenemedi',
+          solutionSteps: solutionStepsText
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean),
+          commonMistakes: commonMistakesText
+            .split('\n')
+            .map((s) => s.trim())
+            .filter(Boolean),
+          similarPracticeQuestion: {
+            questionText: practiceQuestionText,
+            options:
+              question.aiAnalysis?.similarPracticeQuestion?.options || [],
+            correctOption:
+              question.aiAnalysis?.similarPracticeQuestion?.correctOption || '',
+            shortSolution:
+              question.aiAnalysis?.similarPracticeQuestion?.shortSolution || '',
+          },
+          providerName: question.aiAnalysis?.providerName || 'user',
+          analyzedAt: new Date().toISOString(),
         },
-        providerName: question.aiAnalysis?.providerName || 'user',
-        analyzedAt: new Date().toISOString(),
-      },
-      updatedAt: new Date().toISOString(),
-    };
+        updatedAt: new Date().toISOString(),
+      };
 
-    await onSaveQuestion(updated);
-    setSaveBanner('Soru analizi ve konu etiketi başarıyla kaydedildi.');
+      await onSaveQuestion(updated);
+      setSaveSuccess(true);
+      setSaveBanner('Soru analizi ve konu etiketi başarıyla kaydedildi.');
+      setTimeout(() => {
+        onClose();
+      }, 400);
+    } catch (err: any) {
+      setSaveBanner('Kaydedilirken hata oluştu: ' + (err?.message || 'Bilinmeyen hata'));
+    } finally {
+      setIsSavingChanges(false);
+    }
   };
 
   const handleRecordReview = async (outcome: ReviewOutcome) => {
@@ -579,7 +601,38 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
               </div>
             )}
 
-            {activePhoto ? (
+            {isCropMode && activePhoto ? (
+              <FreehandImageCropper
+                imageUrl={activePhoto.originalDataUrl}
+                initialCropRect={activePhoto.cropRect || cropRect}
+                isProcessing={isProcessingImage}
+                onCancel={() => setIsCropMode(false)}
+                onResetOriginal={handleResetCrop}
+                onApplyCrop={async (rect) => {
+                  setIsProcessingImage(true);
+                  try {
+                    const croppedUrl = await applyCropAndRotation(
+                      activePhoto.originalDataUrl,
+                      rect,
+                      rotation
+                    );
+                    await onSavePhotoAsset({
+                      ...activePhoto,
+                      cropRect: rect,
+                      rotation,
+                      croppedDataUrl: croppedUrl,
+                    });
+                    setCropRect(rect);
+                    setIsCropMode(false);
+                    setSaveBanner('Soru serbest elle başarıyla kırpıldı ve kaydedildi.');
+                  } catch (err: any) {
+                    setSaveBanner('Kırpma sırasında hata: ' + (err?.message || 'Bilinmeyen hata'));
+                  } finally {
+                    setIsProcessingImage(false);
+                  }
+                }}
+              />
+            ) : activePhoto ? (
               <div className="relative bg-slate-900/5 rounded-xl overflow-auto max-h-80 flex items-center justify-center p-2 border border-slate-200">
                 <div
                   className="relative inline-block transition-transform duration-150"
@@ -589,111 +642,15 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
                   }}
                 >
                   <img
-                    src={
-                      isCropMode
-                        ? activePhoto.originalDataUrl
-                        : activePhoto.croppedDataUrl || activePhoto.originalDataUrl
-                    }
+                    src={activePhoto.croppedDataUrl || activePhoto.originalDataUrl}
                     alt="Soru fotoğrafı"
-                    className="max-h-72 w-auto object-contain rounded-lg"
+                    className="max-h-72 w-auto object-contain rounded-lg shadow-2xs"
                   />
-                  {isCropMode && (
-                    <div
-                      className="absolute border-2 border-turquoise-400 bg-turquoise-400/15 pointer-events-none"
-                      style={{
-                        left: `${cropRect.x}%`,
-                        top: `${cropRect.y}%`,
-                        width: `${cropRect.width}%`,
-                        height: `${cropRect.height}%`,
-                      }}
-                    />
-                  )}
                 </div>
               </div>
             ) : (
               <div className="text-center py-8 text-xs text-slate-500">
                 Bu soru kaydına henüz fotoğraf eklenmemiş. Yukarıdaki "+ Ek Görüntü" butonuyla fotoğraf yükleyebilirsiniz.
-              </div>
-            )}
-
-            {isCropMode && activePhoto && (
-              <div className="mt-3 bg-white p-3 rounded-xl border border-turquoise-300 space-y-2.5">
-                <div className="text-xs font-bold text-navy-900">
-                  Soru Bazında Kırpma Ayarları (% olarak çerçeveyi daraltın)
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                  <label className="flex flex-col">
-                    <span className="text-slate-600">Sol Başlangıç (%{cropRect.x})</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={85}
-                      value={cropRect.x}
-                      onChange={(e) =>
-                        setCropRect((r) => ({ ...r, x: Number(e.target.value) }))
-                      }
-                    />
-                  </label>
-                  <label className="flex flex-col">
-                    <span className="text-slate-600">Üst Başlangıç (%{cropRect.y})</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={85}
-                      value={cropRect.y}
-                      onChange={(e) =>
-                        setCropRect((r) => ({ ...r, y: Number(e.target.value) }))
-                      }
-                    />
-                  </label>
-                  <label className="flex flex-col">
-                    <span className="text-slate-600">Genişlik (%{cropRect.width})</span>
-                    <input
-                      type="range"
-                      min={15}
-                      max={100 - cropRect.x}
-                      value={cropRect.width}
-                      onChange={(e) =>
-                        setCropRect((r) => ({
-                          ...r,
-                          width: Number(e.target.value),
-                        }))
-                      }
-                    />
-                  </label>
-                  <label className="flex flex-col">
-                    <span className="text-slate-600">Yükseklik (%{cropRect.height})</span>
-                    <input
-                      type="range"
-                      min={15}
-                      max={100 - cropRect.y}
-                      value={cropRect.height}
-                      onChange={(e) =>
-                        setCropRect((r) => ({
-                          ...r,
-                          height: Number(e.target.value),
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <div className="flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={handleResetCrop}
-                    className="px-3 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium"
-                  >
-                    Orijinale Sıfırla
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleApplyCrop}
-                    disabled={isProcessingImage}
-                    className="px-3 py-1.5 text-xs bg-navy-900 hover:bg-navy-800 text-white rounded-lg font-semibold"
-                  >
-                    Seçili Alanı Kırp ve Kaydet
-                  </button>
-                </div>
               </div>
             )}
 
@@ -1155,11 +1112,30 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
             </button>
             <button
               type="button"
+              disabled={isSavingChanges}
               onClick={handleSaveChanges}
-              className="px-4 py-2 text-xs font-bold text-white bg-navy-900 hover:bg-navy-800 rounded-xl flex items-center gap-1.5 shadow-sm"
+              className={`px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition ${
+                saveSuccess
+                  ? 'bg-emerald-600 text-white'
+                  : 'text-white bg-navy-900 hover:bg-navy-800 disabled:opacity-60'
+              }`}
             >
-              <Save className="w-4 h-4 text-turquoise-400" />
-              Değişiklikleri Kaydet
+              {isSavingChanges ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-turquoise-400" />
+                  Kaydediliyor...
+                </>
+              ) : saveSuccess ? (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-white" />
+                  Değişiklikler Kaydedildi!
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4 text-turquoise-400" />
+                  Değişiklikleri Kaydet
+                </>
+              )}
             </button>
           </div>
         </div>

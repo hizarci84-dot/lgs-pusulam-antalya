@@ -149,20 +149,21 @@ export async function detectQuestionTopicWithAi(params: {
 
   const systemPrompt = `Sen MEB 8. Sınıf LGS (Liselere Geçiş Sistemi) sınavı için uzman bir öğretmen ve soru analiz asistanısın.
 Kullanıcı sana "${subjectName}" dersine ait bir soru fotoğrafı gönderdi.
-Bu ders için resmi MEB müfredat konu listesi ve sistemdeki benzersiz ID'leri aşağıdadır:
+Bu ders için resmi MEB müfredat konu listesi ve her konunun altındaki resmî alt kazanımlar aşağıdadır:
 ${topicsListStr}
 
 GÖREVİN:
-1. Görseldeki soru metnini, öncülleri ve şıkları dikkatlice oku.
-2. Bu sorunun hangi MEB LGS konusuna ait olduğunu tespit et.
-3. Yukarıdaki konu listesinden en uygun olan konunun tam "ID" değerini seç.
-4. Yanıtını YALNIZCA aşağıdaki JSON formatında döndür:
+1. Görseldeki soru metnini, öncülleri, şekilleri ve şıkları dikkatlice oku.
+2. Bu sorunun hangi MEB LGS konusuna ait olduğunu ve o konunun altındaki HANGİ ALT KAZANIMA (alt konuya) karşılık geldiğini kesin olarak tespit et.
+3. "topicId": Yukarıdaki listeden en uygun olan konunun tam "ID" değerini seç.
+4. "subtopicName": Seçtiğin konunun "Alt Kazanımlar" dizisinden bu sorunun ölçtüğü tam kazanım adını seç. (Kendi kafandan genel bir ifade yazma, listedeki kazanım adını aynen ver).
+5. Yanıtını YALNIZCA aşağıdaki JSON formatında döndür:
 
 {
   "isReadable": true,
   "topicId": "seçilen_konunun_tam_id_değeri",
   "topicName": "seçilen_konunun_adı",
-  "subtopicName": "varsa_alt_kazanım_veya_detay",
+  "subtopicName": "seçilen_alt_kazanımın_tam_adı",
   "confidence": 95,
   "extractedText": "sorunun_okunabilen_özet_metni"
 }
@@ -231,11 +232,26 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
     const finalTopicId = matchedTopic ? matchedTopic.id : (parsed.topicId || subjectTopics[0]?.id);
     const finalTopicName = matchedTopic ? matchedTopic.topicName : (parsed.topicName || 'Belirlenen Konu');
 
+    // Canonicalize subtopicName against matchedTopic's subtopics
+    let finalSubtopicName = (parsed.subtopicName || '').trim();
+    if (matchedTopic && matchedTopic.subtopics.length > 0) {
+      const lowerCandidate = finalSubtopicName.toLocaleLowerCase('tr-TR');
+      const foundSub = matchedTopic.subtopics.find((st) => {
+        const lowerSt = st.toLocaleLowerCase('tr-TR');
+        return lowerSt === lowerCandidate || lowerCandidate.includes(lowerSt) || lowerSt.includes(lowerCandidate);
+      });
+      if (foundSub) {
+        finalSubtopicName = foundSub;
+      } else if (!finalSubtopicName) {
+        finalSubtopicName = matchedTopic.subtopics[0];
+      }
+    }
+
     return {
       success: true,
       topicId: finalTopicId,
       topicName: finalTopicName,
-      subtopicName: parsed.subtopicName || '',
+      subtopicName: finalSubtopicName,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 90,
       extractedText: parsed.extractedText || '',
     };
@@ -283,12 +299,12 @@ export async function analyzeFullQuestionWithGemini(params: {
 
   const systemPrompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir öğretmen ve soru analiz asistanısın.
 Kullanıcı sana "${subjectName}" dersine ait bir soru fotoğrafı gönderdi.
-Bu ders için resmi MEB müfredat konu listesi:
+Bu ders için resmi MEB müfredat konu listesi ve her konunun altındaki resmî alt kazanımlar aşağıdadır:
 ${topicsListStr}
 
 GÖREVİN:
-1. Görseldeki soru metnini ve seçenekleri oku.
-2. Sorunun konusunu belirle.
+1. Görseldeki soru metnini, öncülleri, şekilleri ve şıkları dikkatlice oku.
+2. Sorunun hangi MEB LGS konusuna ait olduğunu ("suggestedTopicId") ve o konunun altındaki HANGİ ALT KAZANIMA ("suggestedSubtopicName") karşılık geldiğini listeden birebir seçerek kesin olarak belirle.
 3. Sorunun doğru şıkkını, adım adım çözümünü ve bu konuda yapılan yaygın hataları çıkar.
 4. Yanıtını YALNIZCA aşağıdaki JSON formatında döndür:
 
@@ -296,9 +312,9 @@ GÖREVİN:
   "isReadable": true,
   "extractedText": "sorunun_tam_metni",
   "visualDescription": "görseldeki_şekil_ve_tablo_açıklaması",
-  "suggestedTopicId": "seçilen_konunun_id_değeri",
+  "suggestedTopicId": "seçilen_konunun_tam_id_değeri",
   "suggestedTopicName": "konu_adı",
-  "suggestedSubtopicName": "alt_konu_adı",
+  "suggestedSubtopicName": "seçilen_alt_kazanımın_tam_adı",
   "confidence": 95,
   "candidateTopics": [{"topicId": "id", "topicName": "ad", "confidence": 95}],
   "correctAnswer": "A",
@@ -371,10 +387,29 @@ Eğer soru görseli okunamıyorsa:
       };
     }
 
+    // Canonicalize suggestedTopicId & suggestedSubtopicName
+    const matchedTopic = subjectTopics.find((t) => t.id === parsed.suggestedTopicId);
+    let finalSubtopicName = (parsed.suggestedSubtopicName || '').trim();
+    if (matchedTopic && matchedTopic.subtopics.length > 0) {
+      const lowerCandidate = finalSubtopicName.toLocaleLowerCase('tr-TR');
+      const foundSub = matchedTopic.subtopics.find((st) => {
+        const lowerSt = st.toLocaleLowerCase('tr-TR');
+        return lowerSt === lowerCandidate || lowerCandidate.includes(lowerSt) || lowerSt.includes(lowerCandidate);
+      });
+      if (foundSub) {
+        finalSubtopicName = foundSub;
+      } else if (!finalSubtopicName) {
+        finalSubtopicName = matchedTopic.subtopics[0];
+      }
+    }
+
     return {
       success: true,
       analysis: {
         ...parsed,
+        suggestedTopicId: matchedTopic ? matchedTopic.id : (parsed.suggestedTopicId || subjectTopics[0]?.id),
+        suggestedTopicName: matchedTopic ? matchedTopic.topicName : (parsed.suggestedTopicName || 'Belirlenen Konu'),
+        suggestedSubtopicName: finalSubtopicName,
         providerName: 'gemini',
         modelUsed: model,
         analyzedAt: new Date().toISOString(),
