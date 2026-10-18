@@ -463,7 +463,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
               )}
 
               <form onSubmit={handleSave} className="space-y-4 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
                       Öğrenci Adı veya Takma Adı (İsteğe Bağlı)
@@ -508,9 +508,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                       ))}
                     </select>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
                       Hedef Yüzdelik Dilim (%)
@@ -522,35 +520,8 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                       max="50"
                       value={targetPercentile}
                       onChange={(e) => setTargetPercentile(e.target.value)}
+                      placeholder="Örn: 2.5"
                       className="w-full border border-slate-300 rounded-lg px-3 py-2 font-bold text-navy-900"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Haftalık Çalışma Süresi (Saat)
-                    </label>
-                    <input
-                      type="number"
-                      min="2"
-                      max="50"
-                      value={weeklyStudyHours}
-                      onChange={(e) => setWeeklyStudyHours(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Günlük Çalışma Hedefi (Dakika)
-                    </label>
-                    <input
-                      type="number"
-                      min="20"
-                      max="400"
-                      value={dailyStudyMinutes}
-                      onChange={(e) => setDailyStudyMinutes(e.target.value)}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
                     />
                   </div>
                 </div>
@@ -670,47 +641,6 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   </div>
                 </div>
 
-                {/* Adjustable Spaced Repetition Intervals */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <label className="block font-bold text-navy-900 mb-1.5">
-                    Akıllı Tekrar Aralıkları (Gün Olarak Ayarlanabilir)
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <span className="text-[11px] text-slate-600">2. Tekrar (Gün)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={14}
-                        value={interval1}
-                        onChange={(e) => setInterval1(e.target.value)}
-                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-[11px] text-slate-600">3. Tekrar (Gün)</span>
-                      <input
-                        type="number"
-                        min={2}
-                        max={30}
-                        value={interval2}
-                        onChange={(e) => setInterval2(e.target.value)}
-                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-[11px] text-slate-600">4. Tekrar (Gün)</span>
-                      <input
-                        type="number"
-                        min={4}
-                        max={60}
-                        value={interval3}
-                        onChange={(e) => setInterval3(e.target.value)}
-                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 bg-white"
-                      />
-                    </div>
-                  </div>
-                </div>
 
                 {/* Official LGS Result Entry (Section 7 & 15) */}
                 <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 space-y-2">

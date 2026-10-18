@@ -603,8 +603,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <div>
               <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-turquoise-600" />
-                Kişiselleştirilmiş Haftalık Çalışma Programı (Haftalık Hedef:{' '}
-                {student.weeklyStudyHours} Saat)
+                Kişiselleştirilmiş Haftalık Çalışma Programı
               </h2>
               <p className="text-xs text-slate-600 mt-0.5">
                 {studyPlan?.weeklySummaryReport}
