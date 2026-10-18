@@ -423,3 +423,122 @@ Eğer soru görseli okunamıyorsa:
   }
 }
 
+export interface CleanImageResult {
+  success: boolean;
+  cleanedDataUrl?: string;
+  errorMessage?: string;
+  isQuotaError?: boolean;
+}
+
+export const CHATGPT_CLEANUP_PROMPT_TR =
+  'Bu soruda öğrenci tarafından karalanan kısımları kaldırıp sorunun temiz halini karşıma getirebilir misin';
+
+export const AI_IMAGE_CLEANUP_SYSTEM_PROMPT =
+  'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. Produce a clean, straightened, scan-like test page.';
+
+/**
+ * Reads an image from the system clipboard if available.
+ */
+export async function readImageFromClipboard(): Promise<string | null> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.read) {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          return new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Clipboard read image failed or permission denied:', err);
+  }
+  return null;
+}
+
+/**
+ * Attempts to automatically clean scribbles from question image using AI (Gemini Flash-Image).
+ */
+export async function cleanQuestionImageWithAi(dataUrl: string): Promise<CleanImageResult> {
+  const geminiKey = getStoredGeminiApiKey();
+
+  if (geminiKey && geminiKey.trim()) {
+    try {
+      const cleanBase64 = dataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+      const mimeMatch = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey.trim()}`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: AI_IMAGE_CLEANUP_SYSTEM_PROMPT },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: cleanBase64,
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const parts = data?.candidates?.[0]?.content?.parts || [];
+        for (const p of parts) {
+          if (p.inlineData && p.inlineData.data) {
+            const outMime = p.inlineData.mimeType || 'image/png';
+            return {
+              success: true,
+              cleanedDataUrl: `data:${outMime};base64,${p.inlineData.data}`,
+            };
+          }
+        }
+        return {
+          success: false,
+          errorMessage: 'Yapay zekâ yanıt verdi ancak görsel verisi döndürmedi.',
+        };
+      } else {
+        const errText = await response.text();
+        const isQuota =
+          response.status === 429 ||
+          errText.includes('quota') ||
+          errText.includes('free_tier') ||
+          errText.includes('RESOURCE_EXHAUSTED');
+        return {
+          success: false,
+          isQuotaError: isQuota,
+          errorMessage: isQuota
+            ? 'Google AI Studio geliştirici anahtarında görsel üretim modelleri (Flash-Image) için sınır 0 olarak kısıtlıdır. ChatGPT veya Gemini web uygulamasında oluşturulan temiz görseli "Panodan Yapıştır" butonuyla anında soruya aktarabilirsiniz.'
+            : `Gemini API hatası (${response.status}): ${errText.slice(0, 160)}`,
+        };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        errorMessage: `İşlem hatası: ${err?.message || 'Bilinmeyen hata'}`,
+      };
+    }
+  }
+
+  return {
+    success: false,
+    isQuotaError: true,
+    errorMessage: 'Görsel temizleme için geçerli bir API anahtarı bulunamadı.',
+  };
+}
+

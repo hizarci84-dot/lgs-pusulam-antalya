@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Camera,
   CheckCircle2,
+  Clipboard,
   Crop,
   Edit3,
   Eraser,
@@ -16,7 +18,6 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-  AlertTriangle,
 } from 'lucide-react';
 import { FreehandImageCropper } from './FreehandImageCropper';
 import { ImageDaksilModal } from './ImageDaksilModal';
@@ -33,6 +34,7 @@ import { processQuestionReviewOutcome } from '../services/patternEngine';
 import {
   analyzeFullQuestionWithGemini,
   getStoredGeminiApiKey,
+  readImageFromClipboard,
 } from '../services/aiVisionService';
 import {
   CropRect,
@@ -202,6 +204,54 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
     });
     setIsCropMode(false);
     setSaveBanner('Orijinal görüntüye dönüldü.');
+  };
+
+  // Listen for Ctrl+V globally when modal is open to paste clean question image directly
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      if (!activePhoto) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            setIsProcessingImage(true);
+            try {
+              const compressed = await readAndCompressImageFile(file);
+              await onSavePhotoAsset({
+                ...activePhoto,
+                croppedDataUrl: compressed.dataUrl,
+              });
+              setSaveBanner('✨ ChatGPT / Gemini\'den temizlenen soru görüntüsü panodan başarıyla aktarıldı ve kaydedildi!');
+            } catch {
+              setSaveBanner('Görsel yapıştırılırken hata oluştu.');
+            } finally {
+              setIsProcessingImage(false);
+            }
+            break;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [activePhoto]);
+
+  const handlePasteFromClipboardDirect = async () => {
+    if (!activePhoto) return;
+    setSaveBanner('Pano taranıyor...');
+    const dataUrl = await readImageFromClipboard();
+    if (dataUrl) {
+      await onSavePhotoAsset({
+        ...activePhoto,
+        croppedDataUrl: dataUrl,
+      });
+      setSaveBanner('✨ ChatGPT / Gemini\'den temizlenen soru görüntüsü panodan başarıyla aktarıldı ve kaydedildi!');
+    } else {
+      setSaveBanner('Panoda kopyalanmış görsel bulunamadı. Lütfen ChatGPT veya Gemini\'deki temiz resme sağ tıklayıp "Resmi Kopyala" deyin, ardından tekrar basın veya Ctrl+V yapın.');
+    }
   };
 
   const handleAddExtraPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -556,17 +606,27 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
                   }`}
                 >
                   <Crop className="w-3.5 h-3.5" />
-                  {isCropMode ? 'Kırpmayı Kapat' : 'Kırp / Yeniden Kırp'}
+                  {isCropMode ? 'Kırpmayı Kapat' : 'Serbest Kırp'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsDaksilOpen(true)}
                   disabled={!activePhoto}
                   className="px-2.5 py-1 text-xs bg-violet-50 hover:bg-violet-100 text-violet-800 border border-violet-300 rounded-lg flex items-center gap-1 font-bold transition shadow-2xs"
-                  title="Sorudaki yuvarlak içine alınmış şıkkı veya karalamaları beyazlatıp temizleyin"
+                  title="Sorudaki yuvarlak içine alınmış şıkkı, karalamaları daksilleyin veya ChatGPT/Gemini ile temizleyin"
                 >
                   <Eraser className="w-3.5 h-3.5 text-violet-600" />
-                  🧼 Daksil / Temizle
+                  🧼 Daksil / AI Temizle
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePasteFromClipboardDirect}
+                  disabled={!activePhoto}
+                  className="px-2.5 py-1 text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg flex items-center gap-1 font-bold transition shadow-2xs"
+                  title="ChatGPT veya Gemini'deki temiz resmi kopyalayıp buraya doğrudan yapıştırın (veya klavyeden Ctrl+V)"
+                >
+                  <Clipboard className="w-3.5 h-3.5 text-emerald-600" />
+                  📋 Panodan Yapıştır (Ctrl+V)
                 </button>
                 <label className="px-2.5 py-1 text-xs bg-turquoise-600 hover:bg-turquoise-700 text-white rounded-lg cursor-pointer flex items-center gap-1 font-medium">
                   <Camera className="w-3.5 h-3.5" />
