@@ -267,7 +267,7 @@ function doPost(e) {
         {/* Content Body */}
         <div className="p-5 sm:p-6 space-y-6 max-h-[75vh] overflow-y-auto">
           {/* Status Alert if connected */}
-          {settings.enabled && settings.lastSyncedAt && (
+          {settings.enabled && settings.lastSyncedAt && settings.lastSyncStatus === 'success' && (
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-800">
               <div className="flex items-center space-x-2">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
@@ -280,6 +280,63 @@ function doPost(e) {
               <span className="font-semibold text-emerald-700 uppercase tracking-wider text-[10px] bg-emerald-100 px-2 py-0.5 rounded-full">
                 {settings.provider === 'firebase' ? 'Firebase' : 'Google Drive'}
               </span>
+            </div>
+          )}
+
+          {/* Explicit Error Diagnostic Banner */}
+          {settings.enabled && settings.lastSyncStatus === 'error' && (
+            <div className="p-4 bg-rose-50/90 border border-rose-200 rounded-2xl space-y-3">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-rose-100 text-rose-700 rounded-xl flex-shrink-0 mt-0.5">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-rose-900">
+                      Google Apps Script İzin Onayı Gerekiyor
+                    </h4>
+                    <span className="text-[10px] bg-rose-200 text-rose-800 px-2 py-0.5 rounded-full font-bold">
+                      30 Saniyede Çözüm
+                    </span>
+                  </div>
+                  <p className="text-xs text-rose-700 mt-1 leading-relaxed">
+                    {settings.lastSyncMessage ||
+                      'Google, güvenlik sebebiyle Apps Script Web App dağıtımında "Erişimi olanlar: Herkes" seçeneğini onaylamanızı bekliyor.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-xl border border-rose-100 text-xs text-slate-700 space-y-2">
+                <p className="font-semibold text-slate-900">Hızlı Çözüm Adımları:</p>
+                <ol className="list-decimal list-inside space-y-1.5 text-slate-600">
+                  <li>
+                    Aşağıdaki mavi butona tıklayarak <strong>Google Apps Script</strong> projenizi açın.
+                  </li>
+                  <li>
+                    Sağ üstteki mavi <strong>"Dağıt" (Deploy)</strong> butonuna tıklayıp <strong>"Yeni dağıtım" (New deployment)</strong> seçin.
+                  </li>
+                  <li>
+                    <strong className="text-rose-700 underline">EN ÖNEMLİ ADIM:</strong> <strong>"Erişimi olanlar" (Who has access)</strong> ayarını mutlaka <strong>"Herkes" (Anyone)</strong> olarak seçin.
+                  </li>
+                  <li>
+                    <strong>"Dağıt"</strong> butonuna basın, Google hesabınızla istenen onayları verin ve verilen Web App URL'sini kopyalayın.
+                  </li>
+                  <li>
+                    Kopyaladığınız URL'yi aşağıdaki kutucuğa yapıştırıp <strong>"Şimdi Eşitle & Kaydet"</strong> butonuna basın!
+                  </li>
+                </ol>
+                <div className="pt-2 flex flex-wrap gap-2">
+                  <a
+                    href="https://script.google.com/macros/d/1O6_TRZZ1mnJEw8Ti1WFhEL1kZ7ewLAT6ZmXlwC5SOvNMEo8aESWQBjmb/edit"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-sm"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Google Apps Script Projemi Aç
+                  </a>
+                </div>
+              </div>
             </div>
           )}
 
@@ -434,22 +491,21 @@ function doPost(e) {
                 </button>
               </div>
 
-              <div className="text-xs text-slate-600 space-y-1 bg-white p-3 rounded-lg border border-slate-200">
-                <p className="font-semibold text-slate-800">1 Dakikada Kurulum:</p>
-                <p>1. Yukarıdaki "Apps Script Kodunu Kopyala" butonuna basın.</p>
-                <p>
-                  2.{' '}
+              <div className="text-xs text-slate-600 space-y-2 bg-white p-3.5 rounded-lg border border-slate-200">
+                <p className="font-semibold text-slate-800">1 Dakikada Kurulum veya Güncelleme:</p>
+                <div className="flex flex-wrap gap-2">
                   <a
-                    href="https://script.google.com"
+                    href="https://script.google.com/macros/d/1O6_TRZZ1mnJEw8Ti1WFhEL1kZ7ewLAT6ZmXlwC5SOvNMEo8aESWQBjmb/edit"
                     target="_blank"
                     rel="noreferrer"
-                    className="text-blue-600 underline font-medium inline-flex items-center gap-1"
+                    className="text-xs bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold px-2.5 py-1.5 rounded-lg border border-blue-200 inline-flex items-center gap-1"
                   >
-                    script.google.com <ExternalLink className="w-3 h-3" />
-                  </a>{' '}
-                  adresinde Yeni Proje açıp yapıştırın ve Dağıt (Deploy) deyin.
-                </p>
-                <p>3. Size verilen Web Uygulaması URL adresini aşağıdaki kutuya yapıştırın.</p>
+                    Mevcut Apps Script Projenizi Açın <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <p>1. Projenizde sağ üstteki mavi <strong>"Dağıt" (Deploy)</strong> butonuna basıp <strong>"Yeni dağıtım" (New deployment)</strong> seçin.</p>
+                <p>2. <strong>"Erişimi olanlar" (Who has access)</strong> ayarını mutlaka <strong>"Herkes" (Anyone)</strong> olarak belirleyin.</p>
+                <p>3. <strong>"Dağıt"</strong> deyip Google onayını verdikten sonra verilen <strong>Web Uygulaması URL</strong> adresini aşağıdaki kutuya yapıştırın.</p>
               </div>
 
               <div>

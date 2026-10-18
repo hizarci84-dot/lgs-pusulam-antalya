@@ -524,7 +524,9 @@ export const App: React.FC = () => {
               }`}
               title={
                 cloudSettings.enabled
-                  ? `Bulut Aktif (${cloudSettings.provider === 'firebase' ? 'Firebase' : 'Google Drive'}) - Tıklayıp eşitleyin veya ayarları açın`
+                  ? cloudSettings.lastSyncStatus === 'error'
+                    ? 'Eşitleme hatası (Google Apps Script izni gerekiyor) - Düzeltmek için tıklayın'
+                    : `Bulut Aktif (${cloudSettings.provider === 'firebase' ? 'Firebase' : 'Google Drive'}) - Tıklayıp eşitleyin veya ayarları açın`
                   : 'Bulut eşitlemeyi aç (Telefon, tablet ve eşinizin telefonu arasında ortak senkronizasyon)'
               }
             >

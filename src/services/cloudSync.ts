@@ -107,18 +107,52 @@ export async function testCloudConnection(
         };
       }
 
-      const res = await fetch(settings.googleScriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'ping',
-          familySyncId: settings.familySyncId,
-          familySecretPin: settings.familySecretPin,
-          testedAt: new Date().toISOString(),
-        }),
-      });
+      let res: Response;
+      try {
+        res = await fetch(settings.googleScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'ping',
+            familySyncId: settings.familySyncId,
+            familySecretPin: settings.familySecretPin,
+            testedAt: new Date().toISOString(),
+          }),
+        });
+      } catch (networkErr: any) {
+        return {
+          success: false,
+          message:
+            'Google Apps Script sunucusuna bağlanılamadı. CORS veya internet bağlantısı sorunu olabilir.',
+        };
+      }
 
-      const json = await res.json().catch(() => ({}));
+      const text = await res.text().catch(() => '');
+      if (
+        res.status === 401 ||
+        res.status === 403 ||
+        text.includes('Erişime ihtiyacınız var') ||
+        text.includes('dokümanı doğrudan açın') ||
+        text.includes('accounts.google.com')
+      ) {
+        return {
+          success: false,
+          message:
+            'Google İzin Hatası: Apps Script Web App dağıtımında "Erişimi olanlar" ayarı "Herkes" (Anyone) olarak seçilmelidir.',
+        };
+      }
+
+      let json: any = {};
+      try {
+        json = JSON.parse(text);
+      } catch {
+        return {
+          success: false,
+          message:
+            'Google Apps Script geçersiz yanıt döndürdü. Lütfen "Erişimi olanlar: Herkes" seçeneğiyle yeni dağıtım yaptığınızdan emin olun.',
+        };
+      }
+
       if (json.success || res.ok) {
         return {
           success: true,
@@ -236,23 +270,46 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<string
 
   const localData = await getAllDataForSync(settings.lastSyncedAt);
 
-  const res = await fetch(settings.googleScriptUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({
-      action: 'sync',
-      familySyncId: settings.familySyncId,
-      familySecretPin: settings.familySecretPin,
-      lastSyncedAt: settings.lastSyncedAt,
-      localChanges: localData,
-    }),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Google Apps Script sunucu yanıtı: ${res.statusText}`);
+  let res: Response;
+  try {
+    res = await fetch(settings.googleScriptUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'sync',
+        familySyncId: settings.familySyncId,
+        familySecretPin: settings.familySecretPin,
+        lastSyncedAt: settings.lastSyncedAt,
+        localChanges: localData,
+      }),
+    });
+  } catch (err: any) {
+    throw new Error('Google Apps Script bağlantısı kurulamadı. İnternet veya CORS bağlantınızı kontrol edin.');
   }
 
-  const json = await res.json();
+  const text = await res.text().catch(() => '');
+  if (
+    res.status === 401 ||
+    res.status === 403 ||
+    text.includes('Erişime ihtiyacınız var') ||
+    text.includes('dokümanı doğrudan açın') ||
+    text.includes('accounts.google.com') ||
+    (text.trim().startsWith('<') && !res.ok)
+  ) {
+    throw new Error(
+      'Google Apps Script erişim izni gerekiyor: Dağıtım ayarlarında "Erişimi olanlar" seçeneğini "Herkes" (Anyone) olarak seçmelisiniz.'
+    );
+  }
+
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(
+      'Google Apps Script geçerli JSON döndürmedi. Lütfen Web App dağıtım ayarlarında "Erişimi olanlar: Herkes" seçili olduğundan emin olun.'
+    );
+  }
+
   if (json.error) {
     throw new Error(json.error);
   }
