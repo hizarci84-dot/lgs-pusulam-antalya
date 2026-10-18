@@ -1101,9 +1101,8 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                     onChange={(e) => setGeminiModel(e.target.value)}
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white font-medium"
                   >
-                    <option value="gemini-1.5-flash">Gemini 1.5 Flash (Önerilen • Çok Hızlı ve Doğru)</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (Yeni Nesil • En Hızlı)</option>
-                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Derin Akıl Yürütme)</option>
+                    <option value="gemini-flash-latest">Gemini Flash (Önerilen • Çok Hızlı ve Yüksek Doğruluk)</option>
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash (Ultra Hızlı)</option>
                   </select>
                 </div>
 

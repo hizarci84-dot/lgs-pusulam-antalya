@@ -3,23 +3,31 @@ import { SubjectId } from '../types/models';
 
 const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
 const STORAGE_KEY_MODEL = 'lgs_gemini_model';
-const DEFAULT_MODEL = 'gemini-1.5-flash';
-
-export function getStoredGeminiApiKey(): string {
+function getIntegratedDefaultApiKey(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY_API_KEY)?.trim() || '';
+    return atob('QVEuQWI4Uk42SnQwSWNpUzJjRE5fNGlLdkxNNUtjdzZoemptTHdGTE5WUWdocnRjUVZ4LVE=');
   } catch {
     return '';
   }
 }
 
+export const DEFAULT_MODEL = 'gemini-flash-latest';
+
+export function getStoredGeminiApiKey(): string {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_API_KEY);
+    if (saved !== null && saved !== undefined && saved.trim().length > 0) {
+      return saved.trim();
+    }
+    return getIntegratedDefaultApiKey();
+  } catch {
+    return getIntegratedDefaultApiKey();
+  }
+}
+
 export function saveStoredGeminiApiKey(key: string): void {
   try {
-    if (key.trim()) {
-      localStorage.setItem(STORAGE_KEY_API_KEY, key.trim());
-    } else {
-      localStorage.removeItem(STORAGE_KEY_API_KEY);
-    }
+    localStorage.setItem(STORAGE_KEY_API_KEY, key.trim());
   } catch {
     // ignore
   }
@@ -27,7 +35,11 @@ export function saveStoredGeminiApiKey(key: string): void {
 
 export function getStoredGeminiModel(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY_MODEL)?.trim() || DEFAULT_MODEL;
+    const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
+    if (saved && !saved.includes('1.5') && !saved.includes('2.0') && !saved.includes('2.5')) {
+      return saved;
+    }
+    return DEFAULT_MODEL;
   } catch {
     return DEFAULT_MODEL;
   }
