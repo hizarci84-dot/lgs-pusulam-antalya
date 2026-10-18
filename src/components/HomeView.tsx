@@ -7,7 +7,6 @@ import {
   Calendar,
   Camera,
   CheckCircle2,
-  Clock,
   Compass,
   FileBarChart2,
   GraduationCap,
@@ -105,9 +104,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
   }
 
   const dueTodayReviews = reviewTasks.filter((t) => t.isDueTodayOrOverdue);
-  const incompleteStudyTasks = (studyPlan?.tasks || []).filter(
-    (t) => !t.completed
-  );
 
   return (
     <div className="space-y-4 pb-8">
@@ -556,162 +552,104 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           </div>
 
-          {/* 10, 11, 12, 13: Çalışma Görevleri, Hedef Yüzdelik İlerleme ve Hedef Liselerle Karşılaştırma */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* 10. Tamamlanmamış çalışma görevleri */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4 text-turquoise-600" />
-                  Haftalık Tamamlanmamış Çalışma Görevleri (
-                  {incompleteStudyTasks.length})
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('analytics')}
-                  className="text-xs font-bold text-turquoise-700 hover:underline"
-                >
-                  Haftalık Program →
-                </button>
-              </div>
-
-              {incompleteStudyTasks.length === 0 ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 text-xs text-emerald-900">
-                  Bu haftaki tüm planlı çalışma görevleriniz tamamlandı!
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                  {incompleteStudyTasks.slice(0, 5).map((task) => (
-                    <div
-                      key={task.id}
-                      className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-start justify-between gap-2.5"
-                    >
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-navy-900">
-                          {task.dayName} • {SUBJECT_MAP[task.subjectId]?.shortName}:{' '}
-                          {task.topicName}
-                        </div>
-                        <div className="text-[11px] text-slate-600 mt-0.5">
-                          {task.durationMinutes} dk • {task.targetQuestionCount}{' '}
-                          soru hedefi • Öncelik #{task.priorityTier}
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">
-                          {task.priorityReason}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => onToggleStudyTask(task.id)}
-                        className="shrink-0 px-2.5 py-1.5 rounded-lg bg-white hover:bg-emerald-50 border border-slate-300 text-xs font-bold text-emerald-700 flex items-center gap-1"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Tamamla
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+          {/* Hedef Yüzdelik Dilime İlerleme & Hedef Liselerle Karşılaştırma */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
+                <Target className="w-4 h-4 text-turquoise-600" />
+                Hedef Yüzdelik İlerlemesi & Antalya Hedef Liseler
+              </h2>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('schools')}
+                className="text-xs font-bold text-turquoise-700 hover:underline"
+              >
+                Tüm Liseler →
+              </button>
             </div>
 
-            {/* 11, 12, 13: Hedef Yüzdelik Dilime İlerleme & Hedef Liselerle Karşılaştırma */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                  <Target className="w-4 h-4 text-turquoise-600" />
-                  Hedef Yüzdelik İlerlemesi & Antalya Hedef Liseler
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('schools')}
-                  className="text-xs font-bold text-turquoise-700 hover:underline"
-                >
-                  Tüm Liseler →
-                </button>
+            {/* Percentile Progress Box */}
+            <div className="bg-navy-50 border border-navy-200 rounded-xl p-3 space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span className="font-semibold text-slate-700">
+                  Öğrenci Hedef Yüzdelik:{' '}
+                  <strong className="text-navy-900">
+                    %{student.targetPercentile}
+                  </strong>
+                </span>
+                <span className="font-bold text-turquoise-800">
+                  Tahmini Türkiye Geneli Aralık:{' '}
+                  {estimate.estimatedNationalPercentileRange
+                    ? `%${estimate.estimatedNationalPercentileRange[0]} – %${estimate.estimatedNationalPercentileRange[1]}`
+                    : 'Veri Bekleniyor'}
+                </span>
               </div>
-
-              {/* Percentile Progress Box */}
-              <div className="bg-navy-50 border border-navy-200 rounded-xl p-3 space-y-1.5">
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <span className="font-semibold text-slate-700">
-                    Öğrenci Hedef Yüzdelik:{' '}
-                    <strong className="text-navy-900">
-                      %{student.targetPercentile}
-                    </strong>
-                  </span>
-                  <span className="font-bold text-turquoise-800">
-                    Tahmini Türkiye Geneli Aralık:{' '}
-                    {estimate.estimatedNationalPercentileRange
-                      ? `%${estimate.estimatedNationalPercentileRange[0]} – %${estimate.estimatedNationalPercentileRange[1]}`
-                      : 'Veri Bekleniyor'}
+              {estimate.estimatedScoreBand && (
+                <div className="text-xs text-slate-700">
+                  Tahmini Puan Bandı:{' '}
+                  <strong>
+                    {estimate.estimatedScoreBand[0]} –{' '}
+                    {estimate.estimatedScoreBand[1]} Puan
+                  </strong>{' '}
+                  <span className="text-[11px] text-slate-500">
+                    (Kesin LGS puanı değildir; belirsizlik aralığı içerir)
                   </span>
                 </div>
-                {estimate.estimatedScoreBand && (
-                  <div className="text-xs text-slate-700">
-                    Tahmini Puan Bandı:{' '}
-                    <strong>
-                      {estimate.estimatedScoreBand[0]} –{' '}
-                      {estimate.estimatedScoreBand[1]} Puan
-                    </strong>{' '}
-                    <span className="text-[11px] text-slate-500">
-                      (Kesin LGS puanı değildir; belirsizlik aralığı içerir)
+              )}
+              {estimate.officialResult && (
+                <div className="bg-amber-100 border border-amber-300 text-amber-950 px-2.5 py-1.5 rounded-lg text-xs font-bold">
+                  ★ Resmî LGS Sonucu: {estimate.officialResult.officialScore}{' '}
+                  Puan • %{estimate.officialResult.officialGeneralPercentile}{' '}
+                  Yüzdelik Dilim
+                </div>
+              )}
+              <p className="text-[11px] text-slate-600">
+                {estimate.uncertaintyNotice}
+              </p>
+            </div>
+
+            {/* Target Schools Comparison List */}
+            <div className="space-y-2">
+              {targetSchoolComparisons.slice(0, 3).map((sc) => {
+                const badgeStyle =
+                  sc.category === 'avantajli_hedef'
+                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                    : sc.category === 'rekabetci_hedef'
+                    ? 'bg-sky-100 text-sky-800 border-sky-300'
+                    : sc.category === 'zorlayici_hedef'
+                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                    : 'bg-slate-100 text-slate-700 border-slate-300';
+
+                return (
+                  <div
+                    key={sc.school.id}
+                    className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-navy-900 truncate">
+                        {sc.school.schoolName}
+                      </div>
+                      <div className="text-[11px] text-slate-600">
+                        {sc.school.district} • {sc.latestVerifiedYear} Taban:{' '}
+                        <strong>
+                          %{sc.latestPercentile?.toFixed(2)} (
+                          {sc.latestMinScore?.toFixed(2)} P)
+                        </strong>
+                      </div>
+                    </div>
+                    <span
+                      className={`shrink-0 text-[11px] font-bold px-2 py-1 rounded-lg border ${badgeStyle}`}
+                    >
+                      {sc.categoryLabel}
                     </span>
                   </div>
-                )}
-                {estimate.officialResult && (
-                  <div className="bg-amber-100 border border-amber-300 text-amber-950 px-2.5 py-1.5 rounded-lg text-xs font-bold">
-                    ★ Resmî LGS Sonucu: {estimate.officialResult.officialScore}{' '}
-                    Puan • %{estimate.officialResult.officialGeneralPercentile}{' '}
-                    Yüzdelik Dilim
-                  </div>
-                )}
-                <p className="text-[11px] text-slate-600">
-                  {estimate.uncertaintyNotice}
-                </p>
-              </div>
+                );
+              })}
+            </div>
 
-              {/* Target Schools Comparison List */}
-              <div className="space-y-2">
-                {targetSchoolComparisons.slice(0, 3).map((sc) => {
-                  const badgeStyle =
-                    sc.category === 'avantajli_hedef'
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                      : sc.category === 'rekabetci_hedef'
-                      ? 'bg-sky-100 text-sky-800 border-sky-300'
-                      : sc.category === 'zorlayici_hedef'
-                      ? 'bg-amber-100 text-amber-900 border-amber-300'
-                      : 'bg-slate-100 text-slate-700 border-slate-300';
-
-                  return (
-                    <div
-                      key={sc.school.id}
-                      className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="font-bold text-navy-900 truncate">
-                          {sc.school.schoolName}
-                        </div>
-                        <div className="text-[11px] text-slate-600">
-                          {sc.school.district} • {sc.latestVerifiedYear} Taban:{' '}
-                          <strong>
-                            %{sc.latestPercentile?.toFixed(2)} (
-                            {sc.latestMinScore?.toFixed(2)} P)
-                          </strong>
-                        </div>
-                      </div>
-                      <span
-                        className={`shrink-0 text-[11px] font-bold px-2 py-1 rounded-lg border ${badgeStyle}`}
-                      >
-                        {sc.categoryLabel}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
-                <span>Kaynak: MEB e-Okul Merkezî Yerleştirme Verileri</span>
-                <span>Son Güncelleme: {ANTALYA_SCHOOL_DATA_LAST_UPDATED}</span>
-              </div>
+            <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+              <span>Kaynak: MEB e-Okul Merkezî Yerleştirme Verileri</span>
+              <span>Son Güncelleme: {ANTALYA_SCHOOL_DATA_LAST_UPDATED}</span>
             </div>
           </div>
         </>
