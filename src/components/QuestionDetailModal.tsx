@@ -28,6 +28,10 @@ import {
 import { applyCropAndRotation, readAndCompressImageFile } from '../services/imageUtils';
 import { processQuestionReviewOutcome } from '../services/patternEngine';
 import {
+  analyzeFullQuestionWithGemini,
+  getStoredGeminiApiKey,
+} from '../services/aiVisionService';
+import {
   CropRect,
   ErrorReasonCode,
   ExamRecord,
@@ -237,36 +241,32 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
       setAiError('Analiz için önce bu soruya bir fotoğraf eklemelisiniz.');
       return;
     }
+
+    const apiKey = getStoredGeminiApiKey();
+    if (!apiKey) {
+      setAiError(
+        'Yapay zekâ analizi için lütfen Ebeveyn / Ayarlar menüsünden Google Gemini API anahtarınızı girin.'
+      );
+      return;
+    }
+
     setIsAnalyzingAi(true);
     setAiError(null);
-    setAiStatusMessage('Soru görseli güvenli sunucu üzerinden analiz ediliyor...');
+    setAiStatusMessage('Soru görseli Google Gemini Yapay Zekâ ile analiz ediliyor...');
 
     try {
       const imgData = activePhoto.croppedDataUrl || activePhoto.originalDataUrl;
-      const response = await fetch('/api/ai/analyze-question', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: imgData,
-          mimeType: activePhoto.mimeType || 'image/jpeg',
-          subjectId: question.subjectId,
-          subjectName: SUBJECT_MAP[question.subjectId]?.name || question.subjectId,
-          availableTopics: subjectTopics.map((t) => ({
-            id: t.id,
-            unitName: t.unitName,
-            topicName: t.topicName,
-            subtopics: t.subtopics,
-          })),
-          questionStatus: status,
-          studentAnswer,
-        }),
+      const result = await analyzeFullQuestionWithGemini({
+        dataUrl: imgData,
+        subjectId: question.subjectId,
+        questionStatus: status,
+        studentAnswer,
       });
 
-      const result = await response.json();
-      if (!result.success) {
+      if (!result.success || !result.analysis) {
         setAiError(
           result.errorMessage ||
-            'Sunucu tarafında harici görüntü analizi yapılamadı.'
+            'Görüntü analizi gerçekleştirilemedi.'
         );
         setAiStatusMessage(null);
         return;
@@ -276,7 +276,7 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
       if (!analysis.isReadable) {
         setAiError(
           analysis.unreadableReason ||
-            'Görüntü net okunamadı. Lütfen soruyu daha yakından kırpın veya daha net bir fotoğraf yükleyin. (Görselde bulunmayan şekil bilgileri uydurulmamıştır.)'
+            'Görüntü net okunamadı. Lütfen soruyu daha yakından kırpın veya daha net bir fotoğraf yükleyin.'
         );
         setAiStatusMessage(null);
         return;
@@ -311,18 +311,18 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
         isAnalyzed: true,
         aiAnalysis: {
           ...analysis,
-          providerName: result.providerName,
-          modelUsed: result.modelUsed,
+          providerName: result.analysis.providerName || 'gemini',
+          modelUsed: result.analysis.modelUsed || 'gemini',
         },
       };
 
       await onSaveQuestion(updated);
       setAiStatusMessage(
-        `Yapay zekâ analizi tamamlandı (%${analysis.confidence} güven). Önerilen konu etiketini aşağıdan doğrulayabilir veya değiştirebilirsiniz.`
+        `Yapay zekâ analizi tamamlandı (%${analysis.confidence || 90} güven). Önerilen konu etiketini aşağıdan doğrulayabilir veya değiştirebilirsiniz.`
       );
     } catch (err: any) {
       setAiError(
-        `Sunucuya bağlanılamadı (Çevrimdışı mod). Manuel konu etiketleme ve metinden sınıflandırma aktif olarak kullanılabilir.`
+        'Analiz sırasında bir hata oluştu: ' + (err?.message || 'Bilinmeyen hata')
       );
       setAiStatusMessage(null);
     } finally {

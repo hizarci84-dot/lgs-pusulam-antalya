@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Award,
   CheckCircle2,
   Cloud,
@@ -26,6 +27,13 @@ import {
   getSecuritySettings,
   saveSecuritySettings,
 } from '../services/db';
+import {
+  getStoredGeminiApiKey,
+  getStoredGeminiModel,
+  saveStoredGeminiApiKey,
+  saveStoredGeminiModel,
+  testGeminiApiKey,
+} from '../services/aiVisionService';
 import { SchoolType, SecuritySettings, StudentProfile } from '../types/models';
 
 interface ProfileAndSettingsModalProps {
@@ -70,7 +78,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   onLockSession,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'profile' | 'backup' | 'security'
+    'profile' | 'backup' | 'security' | 'ai'
   >('profile');
   const [editingNew, setEditingNew] = useState(isFirstSetup || !activeStudent);
 
@@ -147,6 +155,39 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
     success: boolean;
     text: string;
   } | null>(null);
+
+  // Gemini AI state
+  const [geminiKey, setGeminiKey] = useState(getStoredGeminiApiKey());
+  const [geminiModel, setGeminiModel] = useState(getStoredGeminiModel());
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [isTestingGemini, setIsTestingGemini] = useState(false);
+  const [geminiTestResult, setGeminiTestResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+
+  const handleSaveAndTestGemini = async () => {
+    setIsTestingGemini(true);
+    setGeminiTestResult(null);
+    try {
+      const res = await testGeminiApiKey(geminiKey, geminiModel);
+      setGeminiTestResult(res);
+      if (res.success) {
+        saveStoredGeminiApiKey(geminiKey);
+        saveStoredGeminiModel(geminiModel);
+        setStatusBanner('Google Gemini API Anahtarı başarıyla kaydedildi.');
+      }
+    } finally {
+      setIsTestingGemini(false);
+    }
+  };
+
+  const handleRemoveGeminiKey = () => {
+    saveStoredGeminiApiKey('');
+    setGeminiKey('');
+    setGeminiTestResult(null);
+    setStatusBanner('Google Gemini API Anahtarı kaldırıldı.');
+  };
 
   useEffect(() => {
     getSecuritySettings().then((s) => setSecuritySettings(s));
@@ -367,6 +408,18 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
             >
               <Lock className="w-3.5 h-3.5 text-amber-500" />
               Güvenlik & Şifre
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('ai')}
+              className={`px-3 py-2 text-xs font-bold rounded-t-lg border-b-2 flex items-center gap-1.5 ${
+                activeTab === 'ai'
+                  ? 'border-purple-600 text-purple-700 bg-white'
+                  : 'border-transparent text-slate-600'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+              Yapay Zekâ (Gemini)
             </button>
           </div>
         )}
@@ -971,6 +1024,128 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   <Lock className="w-3.5 h-3.5" />
                   Hemen Kilitle & Kapat
                 </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'ai' && (
+            <div className="space-y-4 text-xs">
+              <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-200 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-purple-600 flex items-center justify-center text-white shadow-xs">
+                      <Sparkles className="w-5 h-5 text-amber-300" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-navy-900">
+                        Google Gemini Vision Yapay Zekâsı
+                      </h4>
+                      <p className="text-[11px] text-slate-600">
+                        Soru fotoğraflarındaki metni okur; MEB LGS konusunu ve çözüm adımlarını otomatik belirler.
+                      </p>
+                    </div>
+                  </div>
+                  {getStoredGeminiApiKey() ? (
+                    <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-full font-bold text-[11px] flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Aktif
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-1 bg-slate-200 text-slate-700 rounded-full font-medium text-[11px]">
+                      Tanımlı Değil
+                    </span>
+                  )}
+                </div>
+
+                <div className="bg-white/90 rounded-xl p-3 border border-purple-100 text-[11px] text-slate-700 leading-relaxed shadow-2xs">
+                  💡 <strong>Google AI Pro / Gemini Advanced</strong> aboneliğinizle veya{' '}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-purple-700 underline font-bold"
+                  >
+                    Google AI Studio
+                  </a>{' '}
+                  üzerinden aldığınız <code className="bg-purple-100 px-1 py-0.5 rounded text-purple-900 font-mono">AIza...</code> ile başlayan API anahtarınızı buraya yapıştırın. Anahtarınız yalnızca sizin telefonunuzda güvenle saklanır.
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-800 mb-1">
+                    Google Gemini API Anahtarı (API Key)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showGeminiKey ? 'text' : 'password'}
+                      value={geminiKey}
+                      onChange={(e) => setGeminiKey(e.target.value)}
+                      placeholder="AIzaSy..."
+                      className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-xl pr-10 bg-white focus:ring-2 focus:ring-purple-400 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowGeminiKey(!showGeminiKey)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                    >
+                      {showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-800 mb-1">
+                    Yapay Zekâ Modeli
+                  </label>
+                  <select
+                    value={geminiModel}
+                    onChange={(e) => setGeminiModel(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white font-medium"
+                  >
+                    <option value="gemini-1.5-flash">Gemini 1.5 Flash (Önerilen • Çok Hızlı ve Doğru)</option>
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash (Yeni Nesil • En Hızlı)</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro (Derin Akıl Yürütme)</option>
+                  </select>
+                </div>
+
+                {geminiTestResult && (
+                  <div
+                    className={`p-3 rounded-xl border flex items-center gap-2 text-xs ${
+                      geminiTestResult.success
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
+                        : 'bg-rose-50 border-rose-200 text-rose-800'
+                    }`}
+                  >
+                    {geminiTestResult.success ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                    <span>{geminiTestResult.message}</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between pt-2">
+                  {getStoredGeminiApiKey() ? (
+                    <button
+                      type="button"
+                      onClick={handleRemoveGeminiKey}
+                      className="text-xs text-rose-600 hover:text-rose-800 underline flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Anahtarı Kaldır
+                    </button>
+                  ) : <div />}
+
+                  <button
+                    type="button"
+                    disabled={isTestingGemini || !geminiKey.trim()}
+                    onClick={handleSaveAndTestGemini}
+                    className="px-4 py-2 bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-sm transition"
+                  >
+                    <Sparkles className="w-4 h-4 text-amber-300" />
+                    {isTestingGemini ? 'Test Ediliyor...' : 'Doğrula ve Kaydet'}
+                  </button>
+                </div>
               </div>
             </div>
           )}

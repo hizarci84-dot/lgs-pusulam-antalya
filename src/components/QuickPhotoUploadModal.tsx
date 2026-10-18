@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Check, Image as ImageIcon, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { Camera, Check, Image as ImageIcon, Plus, RefreshCw, RotateCcw, Sparkles, Trash2, X } from 'lucide-react';
 import {
   ERROR_REASONS,
   LGS_SUBJECTS,
@@ -7,6 +7,11 @@ import {
 } from '../data/curriculum';
 import { readAndCompressImageFile } from '../services/imageUtils';
 import { getTodayDateStr } from '../services/patternEngine';
+import {
+  detectQuestionTopicWithAi,
+  getStoredGeminiApiKey,
+  saveStoredGeminiApiKey,
+} from '../services/aiVisionService';
 import {
   ErrorReasonCode,
   ExamRecord,
@@ -77,6 +82,77 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // AI Topic Detection State
+  const [loadingAiTempId, setLoadingAiTempId] = useState<string | null>(null);
+  const [aiDetectionResult, setAiDetectionResult] = useState<{
+    [tempId: string]: { topicName: string; confidence: number };
+  }>({});
+  const [autoAiDetect, setAutoAiDetect] = useState<boolean>(() =>
+    Boolean(getStoredGeminiApiKey())
+  );
+  const [isApiKeyPromptOpen, setIsApiKeyPromptOpen] = useState(false);
+  const [quickApiKeyInput, setQuickApiKeyInput] = useState('');
+  const [pendingAiItem, setPendingAiItem] = useState<StagedQuestionItem | null>(null);
+
+  const triggerAiTopicDetection = async (item: StagedQuestionItem) => {
+    const key = getStoredGeminiApiKey();
+    if (!key) {
+      setPendingAiItem(item);
+      setIsApiKeyPromptOpen(true);
+      return;
+    }
+
+    setLoadingAiTempId(item.tempId);
+    setErrorMsg(null);
+    try {
+      const res = await detectQuestionTopicWithAi({
+        dataUrl: item.dataUrl,
+        subjectId: item.subjectId,
+      });
+
+      if (res.success && res.topicId) {
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? {
+                  ...p,
+                  topicId: res.topicId!,
+                  studentNote:
+                    p.studentNote ||
+                    (res.subtopicName ? `Kazanım: ${res.subtopicName}` : ''),
+                }
+              : p
+          )
+        );
+        setAiDetectionResult((prev) => ({
+          ...prev,
+          [item.tempId]: {
+            topicName: res.topicName || '',
+            confidence: res.confidence || 90,
+          },
+        }));
+      } else {
+        setErrorMsg(res.errorMessage || 'Yapay zekâ konuyu belirleyemedi.');
+      }
+    } catch (err: any) {
+      setErrorMsg('Yapay zekâ analizi sırasında hata: ' + (err?.message || ''));
+    } finally {
+      setLoadingAiTempId(null);
+    }
+  };
+
+  const handleSaveQuickApiKey = async () => {
+    if (!quickApiKeyInput.trim()) return;
+    saveStoredGeminiApiKey(quickApiKeyInput.trim());
+    setIsApiKeyPromptOpen(false);
+    setAutoAiDetect(true);
+    if (pendingAiItem) {
+      const target = pendingAiItem;
+      setPendingAiItem(null);
+      await triggerAiTopicDetection(target);
+    }
+  };
 
   // Auto-restore staged questions if page was refreshed or recovered
   useEffect(() => {
@@ -265,6 +341,9 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     if (!keepCameraOpen) {
       stopLiveCamera();
     }
+    if (autoAiDetect && getStoredGeminiApiKey()) {
+      triggerAiTopicDetection(newItem);
+    }
   };
 
   const handleCloseModal = () => {
@@ -301,6 +380,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         });
       }
       setStagedItems((prev) => [...prev, ...added]);
+      if (autoAiDetect && getStoredGeminiApiKey()) {
+        for (const it of added) {
+          triggerAiTopicDetection(it);
+        }
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Fotoğraflar yüklenirken bir hata oluştu.');
     } finally {
@@ -496,6 +580,41 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                     </button>
                   </div>
                 </div>
+              </div>
+
+              {/* AI Auto-Detection Toggle Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-violet-50 border border-violet-200 rounded-xl px-3.5 py-2.5 text-xs">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoAiDetect}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setAutoAiDetect(checked);
+                      if (checked && !getStoredGeminiApiKey()) {
+                        setIsApiKeyPromptOpen(true);
+                      }
+                    }}
+                    className="w-4 h-4 text-violet-600 rounded border-slate-300 focus:ring-violet-500"
+                  />
+                  <span className="font-bold text-violet-950 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-violet-600 shrink-0" />
+                    Fotoğraf çekilince MEB konusunu Yapay Zekâ (Gemini) otomatik belirlesin
+                  </span>
+                </label>
+                {!getStoredGeminiApiKey() ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsApiKeyPromptOpen(true)}
+                    className="self-start sm:self-auto text-[11px] font-bold text-violet-700 hover:text-violet-900 bg-white border border-violet-300 px-2.5 py-1 rounded-lg shadow-xs hover:bg-violet-50 transition"
+                  >
+                    API Anahtarı Gir
+                  </button>
+                ) : (
+                  <span className="self-start sm:self-auto text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-200 flex items-center gap-1">
+                    <Check className="w-3 h-3 text-emerald-600" /> Yapay Zekâ Hazır
+                  </span>
+                )}
               </div>
 
               {/* In-App Live Camera Viewfinder & Preview */}
@@ -819,9 +938,30 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                           </div>
 
                           <div className="col-span-2">
-                            <label className="block text-[11px] text-slate-600 mb-0.5">
-                              Konu Etiketi (Sonra da seçilebilir)
-                            </label>
+                            <div className="flex items-center justify-between mb-0.5">
+                              <label className="block text-[11px] text-slate-600">
+                                Konu Etiketi (Sonra da seçilebilir)
+                              </label>
+                              <button
+                                type="button"
+                                disabled={loadingAiTempId === item.tempId}
+                                onClick={() => triggerAiTopicDetection(item)}
+                                className="text-[11px] font-bold text-violet-700 hover:text-violet-900 bg-violet-50 hover:bg-violet-100 border border-violet-200 px-2 py-0.5 rounded flex items-center gap-1 transition disabled:opacity-60"
+                                title="Bu sorunun MEB müfredat konusunu görselden yapay zekâ ile tespit et"
+                              >
+                                {loadingAiTempId === item.tempId ? (
+                                  <>
+                                    <RefreshCw className="w-3 h-3 animate-spin text-violet-600" />
+                                    <span>Tespit Ediliyor...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3 h-3 text-violet-600" />
+                                    <span>✨ Yapay Zekâ ile Belirle</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
                             <select
                               value={item.topicId}
                               onChange={(e) => {
@@ -832,7 +972,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                                   )
                                 );
                               }}
-                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+                              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 bg-white font-medium"
                             >
                               <option value="">-- Sonra Belirle --</option>
                               {topics.map((t) => (
@@ -841,6 +981,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                                 </option>
                               ))}
                             </select>
+                            {aiDetectionResult[item.tempId] && (
+                              <div className="mt-1 text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 flex items-center gap-1.5 font-semibold">
+                                <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span>
+                                  Yapay Zekâ Belirledi: {aiDetectionResult[item.tempId].topicName} (%{aiDetectionResult[item.tempId].confidence} güven)
+                                </span>
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex items-end justify-end">
@@ -890,6 +1038,79 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Quick Gemini API Key Prompt Modal */}
+      {isApiKeyPromptOpen && (
+        <div className="fixed inset-0 z-60 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-navy-950">Google Gemini API Anahtarı</h4>
+                  <p className="text-[11px] text-slate-500">Yapay zekâ ile otomatik konu tespiti için gereklidir</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsApiKeyPromptOpen(false);
+                  setPendingAiItem(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 space-y-1.5">
+              <p className="font-semibold">💡 Google AI Pro veya ücretsiz AI Studio anahtarınızı kullanabilirsiniz:</p>
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                1. <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="underline font-bold text-amber-950">aistudio.google.com/app/apikey</a> adresinden ücretsiz veya Pro hesabınızla API anahtarı alın.
+              </p>
+              <p className="text-[11px] text-amber-800 leading-relaxed">
+                2. Aldığınız anahtar yalnızca kendi cihazınızda (telefonunuzun/bilgisayarınızın tarayıcısında) güvenle saklanır; üçüncü şahıslara veya harici sunuculara kesinlikle iletilmez.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Gemini API Key (AIzaSy...)
+              </label>
+              <input
+                type="password"
+                value={quickApiKeyInput}
+                onChange={(e) => setQuickApiKeyInput(e.target.value)}
+                placeholder="AIzaSy..."
+                className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-violet-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsApiKeyPromptOpen(false);
+                  setPendingAiItem(null);
+                }}
+                className="px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={!quickApiKeyInput.trim()}
+                onClick={handleSaveQuickApiKey}
+                className="px-4 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-50 rounded-xl shadow-sm"
+              >
+                Kaydet ve Devam Et
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
