@@ -537,8 +537,248 @@ export async function cleanQuestionImageWithAi(dataUrl: string): Promise<CleanIm
 
   return {
     success: false,
-    isQuotaError: true,
-    errorMessage: 'Görsel temizleme için geçerli bir API anahtarı bulunamadı.',
+    errorMessage: 'Google Gemini API anahtarı tanımlanmamış.',
   };
+}
+
+/**
+ * Crops a base64 or DataURL image based on normalized [ymin, xmin, ymax, xmax] (0..1000 scale) bounding box.
+ */
+export function cropImageDataUrlByBox(
+  dataUrl: string,
+  box: [number, number, number, number]
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      resolve(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => reject(new Error('Görüntü kırpılırken yüklenemedi.'));
+    img.onload = () => {
+      try {
+        const W = img.naturalWidth || img.width;
+        const H = img.naturalHeight || img.height;
+        const [ymin, xmin, ymax, xmax] = box;
+
+        const x0 = Math.max(0, Math.round((xmin / 1000) * W));
+        const y0 = Math.max(0, Math.round((ymin / 1000) * H));
+        const w = Math.min(W - x0, Math.round(((xmax - xmin) / 1000) * W));
+        const h = Math.min(H - y0, Math.round(((ymax - ymin) / 1000) * H));
+
+        if (w <= 10 || h <= 10) {
+          resolve(dataUrl);
+          return;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+
+        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
+
+export interface AiAutoCleanAndCropResult {
+  success: boolean;
+  cleanDataUrl: string;
+  rawDataUrl: string;
+  subjectId?: SubjectId;
+  topicId?: string;
+  topicName?: string;
+  subtopicName?: string;
+  confidence?: number;
+  isSvgCleaned?: boolean;
+  errorMessage?: string;
+}
+
+/**
+ * End-to-end Automated Question Processor:
+ * 1. Analyzes the question photo with Gemini multimodal vision.
+ * 2. Automatically detects question bounding box and crops away desk/couch/preceding questions.
+ * 3. Reconstructs a clean vector representation (SVG) removing all pencil scribbles & calculations,
+ *    preserving shaded parcels (#a0d8ef), diagrams, math notation, bold stems, and choices A, B, C, D.
+ * 4. Automatically detects MEB Subject, Topic, and Subtopic.
+ */
+export async function processQuestionPhotoWithAi(
+  photoDataUrl: string,
+  subjectHint?: SubjectId
+): Promise<AiAutoCleanAndCropResult> {
+  const geminiKey = getStoredGeminiApiKey();
+  const model = getStoredGeminiModel();
+
+  if (!geminiKey || !geminiKey.trim()) {
+    return {
+      success: false,
+      cleanDataUrl: photoDataUrl,
+      rawDataUrl: photoDataUrl,
+      errorMessage: 'Gemini API anahtarı bulunamadı.',
+    };
+  }
+
+  try {
+    const cleanBase64 = photoDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    const mimeMatch = photoDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    const prompt = `You are an expert document analysis and question reconstruction AI for Turkish LGS (8th grade) exam preparation.
+Analyze this photograph of a test question.
+1. Detect the EXACT bounding box [ymin, xmin, ymax, xmax] (normalized on 0 to 1000 scale) of the target question:
+   - Top: Starts at the question diagram, question stem, or question number. Exclude any text from previous questions above it (e.g. choice options of the prior question).
+   - Bottom: Ends right after the choices (A, B, C, D) and bottom publisher logo / page number. Exclude table, desk, couch, hands, or dark scanner bands below it.
+   - Sides: Include the question width but exclude dark outer background.
+2. Identify the subject (turkce, matematik, fen, inkilap, din, ingilizce), official MEB topicName, subtopicName.
+3. Reconstruct a 100% clean, pristine SVG representation of this question:
+   - Include exact question text, Turkish characters, typography, bold stems, and choices A, B, C, D.
+   - Reconstruct any geometric diagrams, tables, figures, shapes, and shaded regions (e.g. in light blue #a0d8ef) with dimension labels and tick marks.
+   - REMOVE all student pencil markings, handwriting calculations, margin scribbles, underlines, and circled choices.
+   - Clean white background (#ffffff).
+
+Output JSON only in this schema:
+{
+  "question_box_2d": [ymin, xmin, ymax, xmax],
+  "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce",
+  "detectedTopicName": string,
+  "detectedSubtopicName": string,
+  "confidence": number,
+  "cleanSvg": string
+}`;
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey.trim()}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: cleanBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return {
+        success: false,
+        cleanDataUrl: photoDataUrl,
+        rawDataUrl: photoDataUrl,
+        errorMessage: `Gemini API hatası (${response.status}): ${errText.slice(0, 160)}`,
+      };
+    }
+
+    const data = await response.json();
+    const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawJsonText) {
+      return {
+        success: false,
+        cleanDataUrl: photoDataUrl,
+        rawDataUrl: photoDataUrl,
+        errorMessage: 'Yapay zekâdan geçerli yanıt alınamadı.',
+      };
+    }
+
+    const parsed = JSON.parse(rawJsonText);
+    const qBox = parsed.question_box_2d;
+
+    // Crop camera photo according to AI bounding box
+    let croppedRawDataUrl = photoDataUrl;
+    if (Array.isArray(qBox) && qBox.length === 4) {
+      try {
+        croppedRawDataUrl = await cropImageDataUrlByBox(photoDataUrl, qBox as [number, number, number, number]);
+      } catch (cropErr) {
+        console.warn('AI Crop error:', cropErr);
+      }
+    }
+
+    // Process clean SVG
+    let cleanDataUrl = croppedRawDataUrl;
+    let isSvgCleaned = false;
+    if (parsed.cleanSvg && typeof parsed.cleanSvg === 'string' && parsed.cleanSvg.includes('<svg')) {
+      let svgCode = parsed.cleanSvg.replace(/```xml/g, '').replace(/```svg/g, '').replace(/```/g, '').trim();
+      const svgStart = svgCode.indexOf('<svg');
+      const svgEnd = svgCode.lastIndexOf('</svg>');
+      if (svgStart !== -1 && svgEnd !== -1) {
+        svgCode = svgCode.slice(svgStart, svgEnd + 6);
+        cleanDataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svgCode)}`;
+        isSvgCleaned = true;
+      }
+    }
+
+    // Subject resolution
+    let finalSubject: SubjectId = subjectHint || 'matematik';
+    const subStr = (parsed.detectedSubject || '').toLowerCase();
+    if (subStr.includes('mat')) finalSubject = 'matematik';
+    else if (subStr.includes('turk') || subStr.includes('türk')) finalSubject = 'turkce';
+    else if (subStr.includes('fen')) finalSubject = 'fen';
+    else if (subStr.includes('ink') || subStr.includes('tarih')) finalSubject = 'inkilap';
+    else if (subStr.includes('din')) finalSubject = 'din';
+    else if (subStr.includes('ing') || subStr.includes('dil')) finalSubject = 'ingilizce';
+
+    // Topic & Subtopic matching
+    const subjectTopics = getTopicsBySubject(finalSubject);
+    const matchedTopic = subjectTopics.find(
+      (t) =>
+        t.topicName.toLowerCase().includes((parsed.detectedTopicName || '').toLowerCase()) ||
+        (parsed.detectedTopicName || '').toLowerCase().includes(t.topicName.toLowerCase())
+    ) || subjectTopics[0];
+
+    let finalSubtopicName = (parsed.detectedSubtopicName || '').trim();
+    if (matchedTopic && matchedTopic.subtopics.length > 0) {
+      const lowerCandidate = finalSubtopicName.toLocaleLowerCase('tr-TR');
+      const foundSub = matchedTopic.subtopics.find((st) => {
+        const lowerSt = st.toLocaleLowerCase('tr-TR');
+        return lowerSt === lowerCandidate || lowerCandidate.includes(lowerSt) || lowerSt.includes(lowerCandidate);
+      });
+      if (foundSub) {
+        finalSubtopicName = foundSub;
+      } else if (!finalSubtopicName) {
+        finalSubtopicName = matchedTopic.subtopics[0];
+      }
+    }
+
+    return {
+      success: true,
+      cleanDataUrl,
+      rawDataUrl: croppedRawDataUrl,
+      subjectId: finalSubject,
+      topicId: matchedTopic?.id || '',
+      topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
+      subtopicName: finalSubtopicName,
+      confidence: parsed.confidence || 95,
+      isSvgCleaned,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      cleanDataUrl: photoDataUrl,
+      rawDataUrl: photoDataUrl,
+      errorMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
+    };
+  }
 }
 

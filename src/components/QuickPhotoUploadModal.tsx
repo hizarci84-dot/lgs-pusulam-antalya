@@ -28,6 +28,7 @@ import {
   cleanQuestionImageWithAi,
   detectQuestionTopicWithAi,
   getStoredGeminiApiKey,
+  processQuestionPhotoWithAi,
   readImageFromClipboard,
   saveStoredGeminiApiKey,
 } from '../services/aiVisionService';
@@ -113,7 +114,13 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     isCleaned?: boolean;
     width: number;
     height: number;
+    subjectId?: SubjectId;
+    topicId?: string;
+    topicName?: string;
+    subtopicName?: string;
   } | null>(null);
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const [aiProcessingNotice, setAiProcessingNotice] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -468,32 +475,51 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Draw ONLY the area inside the visual question frame
+      // Draw area inside visual question frame
       ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
       const rawDataUrl = canvas.toDataURL('image/jpeg', 0.88);
 
       let finalDataUrl = rawDataUrl;
+      let croppedRawDataUrl = rawDataUrl;
       let isCleaned = false;
+      let detectedSubj = batchSubjectId;
+      let detectedTopId = '';
+      let detectedTopName = '';
+      let detectedSubtop = '';
 
-      if (autoCleanPencil) {
-        setIsCleaningActive(true);
+      // Run End-to-End AI Auto-Crop & Pencil Cleaner if key is configured
+      if (autoAiDetect && getStoredGeminiApiKey()) {
+        setIsAiProcessing(true);
+        setAiProcessingNotice('✨ Yapay Zekâ soruyu otomatik kırpıyor, karalamaları temizliyor ve MEB konusunu belirliyor...');
         try {
-          finalDataUrl = await autoCleanStudentScribbles(rawDataUrl);
-          isCleaned = true;
-        } catch (cleanErr) {
-          console.warn('Otomatik karalama temizleme başarısız, orijinal kullanılıyor:', cleanErr);
-          finalDataUrl = rawDataUrl;
+          const aiRes = await processQuestionPhotoWithAi(rawDataUrl, batchSubjectId);
+          if (aiRes.success) {
+            finalDataUrl = aiRes.cleanDataUrl;
+            croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
+            isCleaned = Boolean(aiRes.isSvgCleaned);
+            if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
+            if (aiRes.topicId) detectedTopId = aiRes.topicId;
+            if (aiRes.topicName) detectedTopName = aiRes.topicName;
+            if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
+          }
+        } catch (aiErr) {
+          console.warn('Yapay zekâ işleme hatası, orijinal kullanılıyor:', aiErr);
         } finally {
-          setIsCleaningActive(false);
+          setIsAiProcessing(false);
+          setAiProcessingNotice(null);
         }
       }
 
       setCapturedPreview({
         dataUrl: finalDataUrl,
-        rawOriginalDataUrl: rawDataUrl,
+        rawOriginalDataUrl: croppedRawDataUrl,
         isCleaned,
         width: canvas.width,
         height: canvas.height,
+        subjectId: detectedSubj,
+        topicId: detectedTopId,
+        topicName: detectedTopName,
+        subtopicName: detectedSubtop,
       });
     } catch (err: any) {
       setErrorMsg('Fotoğraf kırpılırken hata oluştu: ' + (err?.message || ''));
@@ -502,19 +528,35 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
 
   const confirmAndAddPreview = (keepCameraOpen = false) => {
     if (!capturedPreview) return;
+    const finalSubj = capturedPreview.subjectId || batchSubjectId;
+    const finalTopicId = capturedPreview.topicId || '';
+    const finalSubtopic = capturedPreview.subtopicName || '';
+    const tempId = `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    if (capturedPreview.topicName) {
+      setAiDetectionResult((prev) => ({
+        ...prev,
+        [tempId]: {
+          topicName: capturedPreview.topicName!,
+          subtopicName: finalSubtopic,
+          confidence: 95,
+        },
+      }));
+    }
+
     const newItem: StagedQuestionItem = {
-      tempId: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      tempId,
       dataUrl: capturedPreview.dataUrl,
       rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
       isCleaned: Boolean(capturedPreview.isCleaned),
       mimeType: 'image/jpeg',
       width: capturedPreview.width,
       height: capturedPreview.height,
-      subjectId: batchSubjectId,
+      subjectId: finalSubj,
       status: batchStatus,
       questionNumber: '',
-      topicId: '',
-      subtopicName: '',
+      topicId: finalTopicId,
+      subtopicName: finalSubtopic,
       errorReason: '',
       studentNote: '',
     };
@@ -522,9 +564,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     setCapturedPreview(null);
     if (!keepCameraOpen) {
       stopLiveCamera();
-    }
-    if (autoAiDetect && getStoredGeminiApiKey()) {
-      triggerAiTopicDetection(newItem);
     }
   };
 
@@ -548,41 +587,60 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       for (const file of Array.from(files)) {
         const compressed = await readAndCompressImageFile(file);
         let finalDataUrl = compressed.dataUrl;
+        let rawDataUrl = compressed.dataUrl;
         let isCleaned = false;
+        let detectedSubj = batchSubjectId;
+        let detectedTopId = '';
+        let detectedTopName = '';
+        let detectedSubtop = '';
 
-        if (autoCleanPencil) {
+        if (autoAiDetect && getStoredGeminiApiKey()) {
           try {
-            finalDataUrl = await autoCleanStudentScribbles(compressed.dataUrl);
-            isCleaned = true;
-          } catch (cleanErr) {
-            console.warn('Otomatik dosya temizleme atlandı:', cleanErr);
-            finalDataUrl = compressed.dataUrl;
+            const aiRes = await processQuestionPhotoWithAi(compressed.dataUrl, batchSubjectId);
+            if (aiRes.success) {
+              finalDataUrl = aiRes.cleanDataUrl;
+              rawDataUrl = aiRes.rawDataUrl || compressed.dataUrl;
+              isCleaned = Boolean(aiRes.isSvgCleaned);
+              if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
+              if (aiRes.topicId) detectedTopId = aiRes.topicId;
+              if (aiRes.topicName) detectedTopName = aiRes.topicName;
+              if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
+            }
+          } catch (aiErr) {
+            console.warn('AI batch file error:', aiErr);
           }
         }
 
+        const tempId = `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        if (detectedTopName) {
+          setAiDetectionResult((prev) => ({
+            ...prev,
+            [tempId]: {
+              topicName: detectedTopName,
+              subtopicName: detectedSubtop,
+              confidence: 95,
+            },
+          }));
+        }
+
         added.push({
-          tempId: `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          tempId,
           dataUrl: finalDataUrl,
-          rawOriginalDataUrl: compressed.dataUrl,
+          rawOriginalDataUrl: rawDataUrl,
           isCleaned,
           mimeType: compressed.mimeType,
           width: compressed.width,
           height: compressed.height,
-          subjectId: batchSubjectId,
+          subjectId: detectedSubj,
           status: batchStatus,
           questionNumber: '',
-          topicId: '',
-          subtopicName: '',
+          topicId: detectedTopId,
+          subtopicName: detectedSubtop,
           errorReason: '',
           studentNote: '',
         });
       }
       setStagedItems((prev) => [...prev, ...added]);
-      if (autoAiDetect && getStoredGeminiApiKey()) {
-        for (const it of added) {
-          triggerAiTopicDetection(it);
-        }
-      }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Fotoğraflar yüklenirken bir hata oluştu.');
     } finally {
@@ -898,12 +956,21 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         {capturedPreview.isCleaned ? (
                           <p className="text-[11px] text-emerald-300 font-bold flex items-center justify-center gap-1 mt-0.5">
                             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                            Kurşun kalem karalamaları ve işaretlenen şıklar otomatik temizlendi.
+                            Kurşun kalem karalamaları ve işaretler yapay zekâ ile otomatik temizlendi.
                           </p>
                         ) : (
                           <p className="text-[11px] text-slate-300">
                             Masa ve diğer sorular kesildi. Görüntü net ise listeye ekleyebilirsiniz.
                           </p>
+                        )}
+                        {capturedPreview.topicName && (
+                          <div className="mt-1.5 inline-flex items-center gap-1.5 bg-violet-900/60 border border-violet-400/40 text-violet-200 px-3 py-1 rounded-full text-[11px] font-bold">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                            <span>
+                              {capturedPreview.topicName}
+                              {capturedPreview.subtopicName ? ` • ${capturedPreview.subtopicName}` : ''}
+                            </span>
+                          </div>
                         )}
                       </div>
 
@@ -996,6 +1063,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         muted
                         className="w-full h-full object-cover"
                       />
+
+                      {/* AI Auto-Processing Animated Overlay */}
+                      {isAiProcessing && (
+                        <div className="absolute inset-0 bg-navy-950/85 backdrop-blur-xs flex flex-col items-center justify-center p-6 text-center z-30 select-none">
+                          <div className="relative mb-3">
+                            <div className="w-14 h-14 rounded-full border-4 border-turquoise-500/30 border-t-turquoise-400 animate-spin flex items-center justify-center" />
+                            <Sparkles className="w-6 h-6 text-amber-300 absolute inset-0 m-auto" />
+                          </div>
+                          <h4 className="text-white font-bold text-sm mb-1">
+                            Yapay Zekâ Soruyu İşliyor...
+                          </h4>
+                          <p className="text-turquoise-200 text-xs max-w-xs leading-relaxed">
+                            {aiProcessingNotice || 'Sorunun sınırları otomatik kırpılıyor, karalamalar temizleniyor ve MEB konusu belirleniyor.'}
+                          </p>
+                        </div>
+                      )}
 
                       {/* Frame Size Selector at Top */}
                       <div className="absolute top-2.5 inset-x-2 flex items-center justify-center z-20 pointer-events-auto">
@@ -1136,8 +1219,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               </div>
 
               {isLoadingFiles && (
-                <div className="text-center text-xs text-slate-600 py-2">
-                  Fotoğraflar optimize ediliyor...
+                <div className="p-3.5 bg-violet-50 border border-violet-200 rounded-xl text-center flex flex-col items-center justify-center gap-1.5 shadow-2xs">
+                  <div className="flex items-center gap-2 text-violet-950 font-bold text-xs">
+                    <Sparkles className="w-4 h-4 text-violet-600 animate-spin" />
+                    <span>Yapay Zekâ Fotoğrafları İşliyor...</span>
+                  </div>
+                  <p className="text-[11px] text-violet-700">
+                    Soruların sınırları otomatik kırpılıyor, kurşun kalem karalamaları kaldırılıyor ve MEB konuları belirleniyor.
+                  </p>
                 </div>
               )}
 
