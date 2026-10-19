@@ -378,39 +378,57 @@ export function cleanImageDataPixels(
       const b = data[idx + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
 
-      // Colored ballpoint pen / highlighter detection (blue, red, green student ink)
-      if (removeColorPen) {
-        const maxC = Math.max(r, g, b);
-        const minC = Math.min(r, g, b);
-        const chroma = maxC - minC;
-
-        if (chroma > 24 && lum > 60) {
-          data[idx] = 255;
-          data[idx + 1] = 255;
-          data[idx + 2] = 255;
-          continue;
-        }
-      }
+      const maxC = Math.max(r, g, b);
+      const minC = Math.min(r, g, b);
+      const chroma = maxC - minC;
 
       const localBg = getLocalBg(x, y);
       const relLum = Math.min(255, (lum / Math.max(1, localBg)) * 255);
 
+      // 1. Pure paper background (brightest areas close to local paper lighting) -> crisp white
+      if (relLum >= 242) {
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        continue;
+      }
+
+      // 2. Shaded diagram regions in LGS questions (e.g. light blue "taralı alan" with lum >= 140 and moderate chroma)
+      // Must be strictly preserved in original full color!
+      if (lum >= 140 && chroma >= 14 && chroma <= 65 && relLum < 242) {
+        continue;
+      }
+
+      // 3. Student colored pen ink (deep blue ballpoint, bright red pen, neon highlighter)
+      if (removeColorPen && (chroma > 60 || (chroma > 25 && lum < 140))) {
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 255;
+        continue;
+      }
+
+      // 4. Other colored printed items (diagram lines, logos)
+      if (chroma > 20) {
+        continue;
+      }
+
+      // 5. Neutral paper, pencil graphite, and dark printed ink
       if (relLum >= pencilCutoff) {
-        // Paper background, pencil graphite, circled answers, underlines -> PURE WHITE
+        // Paper background and pencil graphite scribbles -> PURE WHITE
         data[idx] = 255;
         data[idx + 1] = 255;
         data[idx + 2] = 255;
       } else if (relLum <= inkCutoff) {
-        // Printed text & diagrams -> DEEP CRISP CONTRAST
+        // Printed black ink -> crisp deep dark
         const inkFactor = relLum / inkCutoff;
-        const dark = Math.round(inkFactor * 28);
+        const dark = Math.round(inkFactor * 32);
         data[idx] = dark;
-        data[idx + 1] = Math.round(dark * 1.05);
-        data[idx + 2] = Math.round(dark * 1.15);
+        data[idx + 1] = dark;
+        data[idx + 2] = dark;
       } else {
-        // Anti-aliased font transition
+        // Anti-aliased font edges & gray diagram borders -> smooth transition
         const t = (relLum - inkCutoff) / (pencilCutoff - inkCutoff);
-        const smoothVal = Math.round(28 + Math.pow(t, 1.4) * (255 - 28));
+        const smoothVal = Math.round(32 + Math.pow(t, 1.4) * (255 - 32));
         data[idx] = smoothVal;
         data[idx + 1] = smoothVal;
         data[idx + 2] = smoothVal;
