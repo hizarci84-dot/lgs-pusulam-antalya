@@ -11,7 +11,6 @@ import {
   FileBarChart2,
   GraduationCap,
   PlusCircle,
-  RefreshCw,
   Sparkles,
   Target,
 } from 'lucide-react';
@@ -38,7 +37,7 @@ interface HomeViewProps {
   student: StudentProfile;
   exams: ExamRecord[];
   questions: QuestionRecord[];
-  reviewTasks: ReviewTask[];
+  reviewTasks?: ReviewTask[];
   patternReport: ComprehensivePatternReport;
   estimate: PercentileAndScoreEstimate;
   studyPlan: WeeklyStudyPlan | null;
@@ -103,8 +102,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
     }
   }
 
-  const dueTodayReviews = reviewTasks.filter((t) => t.isDueTodayOrOverdue);
-
   return (
     <div className="space-y-4 pb-8">
       {/* Hero Banner & Quick Actions (6 Required Quick Actions) */}
@@ -137,8 +134,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </div>
         </div>
 
-        {/* 6 Quick Action Buttons */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {/* 5 Quick Action Buttons */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
           <button
             type="button"
             onClick={onQuickAddExam}
@@ -168,21 +165,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
           <button
             type="button"
-            onClick={() => {
-              const el = document.getElementById('home-reviews-card');
-              if (el) el.scrollIntoView({ behavior: 'smooth' });
-              else onNavigateTab('notebook');
-            }}
-            className="bg-white/12 hover:bg-white/20 text-white font-semibold text-xs p-2.5 rounded-xl flex items-center justify-center gap-1.5 border border-white/15 transition"
-          >
-            <RefreshCw className="w-4 h-4 text-turquoise-300 shrink-0" />
-            <span>
-              Bugünkü Tekrarlar ({dueTodayReviews.length})
-            </span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => onNavigateTab('schools')}
             className="bg-white/12 hover:bg-white/20 text-white font-semibold text-xs p-2.5 rounded-xl flex items-center justify-center gap-1.5 border border-white/15 transition"
           >
@@ -193,7 +175,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <button
             type="button"
             onClick={() => onNavigateTab('analytics')}
-            className="bg-white/12 hover:bg-white/20 text-white font-semibold text-xs p-2.5 rounded-xl flex items-center justify-center gap-1.5 border border-white/15 transition"
+            className="col-span-2 sm:col-span-1 bg-white/12 hover:bg-white/20 text-white font-semibold text-xs p-2.5 rounded-xl flex items-center justify-center gap-1.5 border border-white/15 transition"
           >
             <FileBarChart2 className="w-4 h-4 text-turquoise-300 shrink-0" />
             <span>Gelişim Raporunu Aç</span>
@@ -430,126 +412,60 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
           </div>
 
-          {/* 8 & 9: Tekrar Eden Konu Eksikleri & Bugün Tekrar Edilmesi Gereken Sorular */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* 8. Tekrar eden konu eksikleri */}
-            <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                  <AlertCircle className="w-4 h-4 text-rose-600" />
-                  Tekrar Eden Konu Eksikleri
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('analytics')}
-                  className="text-xs font-bold text-turquoise-700 hover:underline"
-                >
-                  Tüm Hata Analizi →
-                </button>
-              </div>
-
-              {patternReport.recurringWrongTopics.length === 0 &&
-              patternReport.highBlankTopics.length === 0 ? (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-600">
-                  Birden fazla denemede tekrar eden kritik bir konu eksikliği henüz tespit edilmedi. Yanlış ve boş sorularınıza konu etiketi ekledikçe örüntü motoru otomatik güncellenir.
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {[
-                    ...patternReport.recurringWrongTopics,
-                    ...patternReport.highBlankTopics.filter(
-                      (hb) =>
-                        !patternReport.recurringWrongTopics.some(
-                          (rw) => rw.topicId === hb.topicId
-                        )
-                    ),
-                  ]
-                    .slice(0, 4)
-                    .map((tm) => (
-                      <div
-                        key={tm.topicId}
-                        className="p-3 rounded-xl bg-rose-50/60 border border-rose-200 space-y-1"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-extrabold text-navy-900">
-                            {SUBJECT_MAP[tm.subjectId]?.shortName} •{' '}
-                            {tm.topicName}
-                          </span>
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-rose-600 text-white">
-                            Öncelik: {tm.priorityScore}/100
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-700 leading-relaxed">
-                          {tm.explanationText}
-                        </p>
-                      </div>
-                    ))}
-                </div>
-              )}
+          {/* 8. Tekrar eden konu eksikleri */}
+          <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+                Tekrar Eden Konu Eksikleri
+              </h2>
+              <button
+                type="button"
+                onClick={() => onNavigateTab('analytics')}
+                className="text-xs font-bold text-turquoise-700 hover:underline"
+              >
+                Tüm Hata Analizi →
+              </button>
             </div>
 
-            {/* 9. Bugün tekrar edilmesi gereken sorular */}
-            <div
-              id="home-reviews-card"
-              className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-3"
-            >
-              <div className="flex items-center justify-between">
-                <h2 className="font-bold text-sm text-navy-900 flex items-center gap-1.5">
-                  <RefreshCw className="w-4 h-4 text-turquoise-600" />
-                  Bugün Tekrar Edilmesi Gereken Sorular ({dueTodayReviews.length})
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => onNavigateTab('notebook')}
-                  className="text-xs font-bold text-turquoise-700 hover:underline"
-                >
-                  Yanlış Defterini Aç →
-                </button>
+            {patternReport.recurringWrongTopics.length === 0 &&
+            patternReport.highBlankTopics.length === 0 ? (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs text-slate-600">
+                Birden fazla denemede tekrar eden kritik bir konu eksikliği henüz tespit edilmedi. Yanlış ve boş sorularınıza konu etiketi ekledikçe örüntü motoru otomatik güncellenir.
               </div>
-
-              {dueTodayReviews.length === 0 ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 text-xs text-emerald-900">
-                  Bugün için bekleyen veya tarihi geçmiş soru tekrarınız bulunmuyor! Yeni yanlış/boş soruları yüklediğinizde 1-3-7 gün tekrar planı otomatik oluşturulur.
-                </div>
-              ) : (
-                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-                  {dueTodayReviews.slice(0, 6).map((task) => (
+            ) : (
+              <div className="space-y-2.5">
+                {[
+                  ...patternReport.recurringWrongTopics,
+                  ...patternReport.highBlankTopics.filter(
+                    (hb) =>
+                      !patternReport.recurringWrongTopics.some(
+                        (rw) => rw.topicId === hb.topicId
+                      )
+                  ),
+                ]
+                  .slice(0, 4)
+                  .map((tm) => (
                     <div
-                      key={task.questionId}
-                      onClick={() => onOpenQuestionModal(task.questionId)}
-                      className="p-2.5 rounded-xl bg-slate-50 hover:bg-turquoise-50/60 border border-slate-200 cursor-pointer flex items-center justify-between gap-2 transition"
+                      key={tm.topicId}
+                      className="p-3 rounded-xl bg-rose-50/60 border border-rose-200 space-y-1"
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                              task.status === 'wrong'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}
-                          >
-                            {task.status === 'wrong' ? 'YANLIŞ' : 'BOŞ'}
-                          </span>
-                          <span className="text-xs font-bold text-navy-900 truncate">
-                            {SUBJECT_MAP[task.subjectId]?.shortName} •{' '}
-                            {task.topicName}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                          {task.examName} • Aşama {task.reviewStage + 1}/4
-                          {task.daysOverdue > 0
-                            ? ` (${task.daysOverdue} gün gecikti)`
-                            : ' (Bugün)'}
-                        </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-extrabold text-navy-900">
+                          {SUBJECT_MAP[tm.subjectId]?.shortName} •{' '}
+                          {tm.topicName}
+                        </span>
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-rose-600 text-white">
+                          Öncelik: {tm.priorityScore}/100
+                        </span>
                       </div>
-                      <span className="shrink-0 text-xs font-bold text-turquoise-700 bg-white px-2.5 py-1 rounded-lg border border-turquoise-300">
-                        Tekrar Çöz →
-                      </span>
+                      <p className="text-xs text-slate-700 leading-relaxed">
+                        {tm.explanationText}
+                      </p>
                     </div>
                   ))}
-                </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Hedef Yüzdelik Dilime İlerleme & Hedef Liselerle Karşılaştırma */}
