@@ -513,7 +513,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       // Run End-to-End AI Auto-Crop & Pencil Cleaner if key is configured
       if (autoAiDetect && getStoredGeminiApiKey()) {
         setIsAiProcessing(true);
-        setAiProcessingNotice('✨ Yapay Zekâ soruyu otomatik kırpıyor, karalamaları temizliyor ve MEB konusunu belirliyor...');
         try {
           const aiRes = await processQuestionPhotoWithAi(rawDataUrl, batchSubjectId);
           if (aiRes.success && aiRes.cleanDataUrl) {
@@ -524,21 +523,12 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             if (aiRes.topicId) detectedTopId = aiRes.topicId;
             if (aiRes.topicName) detectedTopName = aiRes.topicName;
             if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
-          } else {
-            // Fallback to local whitening filter
-            const localClean = await applyDocumentWhiteningFilter(rawDataUrl);
-            finalDataUrl = localClean;
-            isCleaned = true;
+          } else if (aiRes.errorMessage) {
+            setErrorMsg(aiRes.errorMessage);
           }
         } catch (aiErr: any) {
-          console.warn('Yapay zekâ işleme hatası, yerel filtre kullanılıyor:', aiErr);
-          try {
-            const localClean = await applyDocumentWhiteningFilter(rawDataUrl);
-            finalDataUrl = localClean;
-            isCleaned = true;
-          } catch {
-            // ignore
-          }
+          console.warn('Yapay zekâ işleme hatası:', aiErr);
+          setErrorMsg('Yapay zekâ işlemi sırasında hata oluştu: ' + (aiErr?.message || 'Lütfen tekrar deneyin veya Gemini\'den yapıştırın.'));
         } finally {
           setIsAiProcessing(false);
           setAiProcessingNotice(null);
@@ -583,27 +573,16 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           subtopicName: aiRes.subtopicName || capturedPreview.subtopicName,
         });
       } else {
-        const localClean = await applyDocumentWhiteningFilter(src);
-        setCapturedPreview({
-          ...capturedPreview,
-          dataUrl: localClean,
-          cleanDataUrl: localClean,
-          isCleaned: true,
-        });
+        setErrorMsg(
+          aiRes.errorMessage ||
+            'Yapay zekâ yanıt veremedi. Telefonunuzdaki Gemini uygulamasında temizlediğiniz görseli kopyalayıp yeşil "📋 Panodan Yapıştır" butonuna basarak anında aktarabilirsiniz.'
+        );
       }
     } catch (err: any) {
-      try {
-        const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
-        const localClean = await applyDocumentWhiteningFilter(src);
-        setCapturedPreview({
-          ...capturedPreview,
-          dataUrl: localClean,
-          cleanDataUrl: localClean,
-          isCleaned: true,
-        });
-      } catch {
-        setErrorMsg('Temizleme hatası: ' + (err?.message || ''));
-      }
+      setErrorMsg(
+        'Temizleme sırasında hata: ' +
+          (err?.message || 'İnternet bağlantınızı kontrol edin veya Gemini\'den resmi panoya kopyalayıp yeşil butona basın.')
+      );
     } finally {
       setIsAiProcessing(false);
       setAiProcessingNotice(null);
@@ -644,39 +623,13 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           }));
         }
       } else {
-        const localClean = await applyDocumentWhiteningFilter(src);
-        setStagedItems((prev) =>
-          prev.map((p) =>
-            p.tempId === item.tempId
-              ? {
-                  ...p,
-                  dataUrl: localClean,
-                  cleanDataUrl: localClean,
-                  isCleaned: true,
-                }
-              : p
-          )
+        setErrorMsg(
+          res.errorMessage ||
+            'Yapay zekâ temizleme yapamadı. Gemini uygulamasından temizlediğiniz görseli kopyalayıp yeşil "Panodan Yapıştır" butonunu kullanabilirsiniz.'
         );
       }
     } catch (err: any) {
-      try {
-        const src = item.rawOriginalDataUrl || item.dataUrl;
-        const localClean = await applyDocumentWhiteningFilter(src);
-        setStagedItems((prev) =>
-          prev.map((p) =>
-            p.tempId === item.tempId
-              ? {
-                  ...p,
-                  dataUrl: localClean,
-                  cleanDataUrl: localClean,
-                  isCleaned: true,
-                }
-              : p
-          )
-        );
-      } catch {
-        setErrorMsg('Yapay zekâ temizleme hatası: ' + (err?.message || ''));
-      }
+      setErrorMsg('Yapay zekâ temizleme hatası: ' + (err?.message || ''));
     } finally {
       setCleaningTempId(null);
     }

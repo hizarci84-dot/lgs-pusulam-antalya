@@ -259,7 +259,7 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(18000),
+          signal: AbortSignal.timeout(60000),
           body: JSON.stringify({
             contents: [
               {
@@ -277,6 +277,7 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
             generationConfig: {
               temperature: 0.1,
               responseMimeType: 'application/json',
+              thinkingConfig: { thinkingBudget: 1 },
             },
           }),
         });
@@ -435,7 +436,7 @@ Eğer soru görseli okunamıyorsa:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(18000),
+          signal: AbortSignal.timeout(60000),
           body: JSON.stringify({
             contents: [
               {
@@ -453,6 +454,7 @@ Eğer soru görseli okunamıyorsa:
             generationConfig: {
               temperature: 0.2,
               responseMimeType: 'application/json',
+              thinkingConfig: { thinkingBudget: 1 },
             },
           }),
         });
@@ -714,9 +716,9 @@ Bu soru fotoğrafını incele:
    - Soru numarası, soru kökü, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
    - Önceki/sonraki soruları, masa, halı, parmak ve kenar boşluklarını hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "illustration_box_2d": Sorudaki görselin (çiçekler, vazolar, şekil, grafik veya deney düzeneği) [ymin, xmin, ymax, xmax] koordinatları. Şekil yoksa null ver.
-4. "question_number": Soru numarası (örn: "2.")
-5. "header_text": Şeklin üstündeki soru metni (öğrencinin kurşun kalemle çizdiği alt çizgiler, karalamalar tamamen çıkarılmış temiz orijinal metin).
+3. "illustration_box_2d": Sorudaki şekil, çizim, grafik, tablo, deney düzeneği veya asal çarpan algoritması sütununun [ymin, xmin, ymax, xmax] koordinatları. Şekil/tablo yoksa null ver.
+4. "question_number": Soru numarası (örn: "2." veya "3.")
+5. "header_text": Şeklin/tablonun üstündeki soru metni (öğrencinin kurşun kalemle çizdiği alt çizgiler, karalamalar tamamen çıkarılmış temiz orijinal metin).
 6. "stem_text": Şeklin altındaki soru metni ve koyu renkli soru kökü.
 7. "choices": ["A şıkkı metni", "B şıkkı metni", "C şıkkı metni", "D şıkkı metni"] (şık daireleri ve öğrenci işaretlemeleri tamamen temizlenmiş).
 8. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
@@ -753,7 +755,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(18000),
+          signal: AbortSignal.timeout(60000),
           body: JSON.stringify({
             contents: [
               {
@@ -771,6 +773,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
             generationConfig: {
               responseMimeType: 'application/json',
               temperature: 0.1,
+              thinkingConfig: { thinkingBudget: 1 },
             },
           }),
         });
@@ -794,23 +797,12 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
     }
 
     if (!parsed) {
-      try {
-        const localClean = await applyDocumentWhiteningFilter(photoDataUrl);
-        return {
-          success: true,
-          cleanDataUrl: localClean,
-          rawDataUrl: photoDataUrl,
-          isFaithfulCleaned: true,
-          errorMessage: `Yapay zekâ yanıt veremedi (${lastError}), yerel filtre ile temizlendi.`,
-        };
-      } catch {
-        return {
-          success: false,
-          cleanDataUrl: photoDataUrl,
-          rawDataUrl: photoDataUrl,
-          errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
-        };
-      }
+      return {
+        success: false,
+        cleanDataUrl: photoDataUrl,
+        rawDataUrl: photoDataUrl,
+        errorMessage: `Yapay zekâ yanıt veremedi (${lastError}). İsterseniz Gemini'den kopyalayıp yeşil 'Panodan Yapıştır' butonunu kullanabilirsiniz.`,
+      };
     }
 
     // 1. Crop & Straighten the original camera photo to upright question
