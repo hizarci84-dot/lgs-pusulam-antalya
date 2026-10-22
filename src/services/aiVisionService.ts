@@ -641,16 +641,20 @@ export async function processQuestionPhotoWithAi(
 
     const prompt = `You are an expert document analysis and question reconstruction AI for Turkish LGS (8th grade) exam preparation.
 Analyze this photograph of a test question.
+Note: The photograph might be captured at an angle or rotated sideways (e.g. 90 degrees landscape). Locate the target question accurately.
+
 1. Detect the EXACT bounding box [ymin, xmin, ymax, xmax] (normalized on 0 to 1000 scale) of the target question:
-   - Top: Starts at the question diagram, question stem, or question number. Exclude any text from previous questions above it (e.g. choice options of the prior question).
-   - Bottom: Ends right after the choices (A, B, C, D) and bottom publisher logo / page number. Exclude table, desk, couch, hands, or dark scanner bands below it.
-   - Sides: Include the question width but exclude dark outer background.
+   - Top: Starts at the question diagram, question stem, or question number. Exclude any text from previous questions above it.
+   - Bottom: Ends right after choices (A, B, C, D) and bottom publisher footer. Exclude adjacent questions, carpet, desk, hands, or shadows.
+   - Sides: Include the question width cleanly.
 2. Identify the subject (turkce, matematik, fen, inkilap, din, ingilizce), official MEB topicName, subtopicName.
-3. Reconstruct a 100% clean, pristine SVG representation of this question:
-   - Include exact question text, Turkish characters, typography, bold stems, and choices A, B, C, D.
-   - Reconstruct any geometric diagrams, tables, figures, shapes, and shaded regions (e.g. in light blue #a0d8ef) with dimension labels and tick marks.
-   - REMOVE all student pencil markings, handwriting calculations, margin scribbles, underlines, and circled choices.
-   - Clean white background (#ffffff).
+3. Reconstruct a 100% clean, pristine vector SVG representation of this question:
+   - Dimensions: viewBox="0 0 800 1100", width="800", height="1100", style="background-color:#ffffff;".
+   - Margins: Content width is 700px, x starts at 50 (50px margin left and right).
+   - Text Wrapping: Ensure ALL text lines wrap cleanly within x=50 to x=750 using multi-line <text> or <tspan x="50" dy="1.4em">. NEVER allow any word or sentence to be clipped on the right!
+   - Full question text, Turkish characters (ç, ğ, ı, ö, ş, ü), bold question stem, and choices A, B, C, D on a neat row.
+   - Graphics & Diagrams: Reconstruct all visual diagrams with high fidelity (e.g. calendar headers with spiral holes and dates, geometric parcels with area labels, tables, charts, dimension arrows).
+   - Clean white background (#ffffff). REMOVE ALL student pencil markings, handwriting notes, margin calculations, underlines, circles, and crosses.
 
 Output JSON only in this schema:
 {
