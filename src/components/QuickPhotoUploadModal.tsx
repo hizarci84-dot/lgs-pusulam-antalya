@@ -110,6 +110,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const [frameSize, setFrameSize] = useState<'compact' | 'standard' | 'wide'>('compact');
   const [capturedPreview, setCapturedPreview] = useState<{
     dataUrl: string;
+    cleanDataUrl?: string;
     rawOriginalDataUrl?: string;
     isCleaned?: boolean;
     width: number;
@@ -121,6 +122,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   } | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiProcessingNotice, setAiProcessingNotice] = useState<string | null>(null);
+  const [cleaningTempId, setCleaningTempId] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -501,9 +503,12 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             if (aiRes.topicId) detectedTopId = aiRes.topicId;
             if (aiRes.topicName) detectedTopName = aiRes.topicName;
             if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
+          } else if (aiRes.errorMessage) {
+            setErrorMsg(aiRes.errorMessage);
           }
-        } catch (aiErr) {
+        } catch (aiErr: any) {
           console.warn('Yapay zekâ işleme hatası, orijinal kullanılıyor:', aiErr);
+          setErrorMsg('Yapay zekâ temizleme hatası: ' + (aiErr?.message || ''));
         } finally {
           setIsAiProcessing(false);
           setAiProcessingNotice(null);
@@ -512,6 +517,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
 
       setCapturedPreview({
         dataUrl: finalDataUrl,
+        cleanDataUrl: isCleaned ? finalDataUrl : undefined,
         rawOriginalDataUrl: croppedRawDataUrl,
         isCleaned,
         width: canvas.width,
@@ -523,6 +529,79 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       });
     } catch (err: any) {
       setErrorMsg('Fotoğraf kırpılırken hata oluştu: ' + (err?.message || ''));
+    }
+  };
+
+  const handleCleanPreviewWithAi = async () => {
+    if (!capturedPreview) return;
+    setIsAiProcessing(true);
+    setAiProcessingNotice('✨ Yapay Zekâ soruyu otomatik kırpıyor ve karalamaları temizliyor...');
+    setErrorMsg(null);
+    try {
+      const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
+      const aiRes = await processQuestionPhotoWithAi(src, capturedPreview.subjectId || batchSubjectId);
+      if (aiRes.success && aiRes.cleanDataUrl) {
+        setCapturedPreview({
+          ...capturedPreview,
+          dataUrl: aiRes.cleanDataUrl,
+          cleanDataUrl: aiRes.cleanDataUrl,
+          rawOriginalDataUrl: aiRes.rawDataUrl || capturedPreview.rawOriginalDataUrl || src,
+          isCleaned: true,
+          subjectId: aiRes.subjectId || capturedPreview.subjectId,
+          topicId: aiRes.topicId || capturedPreview.topicId,
+          topicName: aiRes.topicName || capturedPreview.topicName,
+          subtopicName: aiRes.subtopicName || capturedPreview.subtopicName,
+        });
+      } else {
+        setErrorMsg(aiRes.errorMessage || 'Yapay zekâ temizleme işlemi tamamlanamadı.');
+      }
+    } catch (err: any) {
+      setErrorMsg('Temizleme hatası: ' + (err?.message || ''));
+    } finally {
+      setIsAiProcessing(false);
+      setAiProcessingNotice(null);
+    }
+  };
+
+  const handleAiCleanStagedItem = async (item: StagedQuestionItem) => {
+    setCleaningTempId(item.tempId);
+    setErrorMsg(null);
+    try {
+      const src = item.rawOriginalDataUrl || item.dataUrl;
+      const res = await processQuestionPhotoWithAi(src, item.subjectId);
+      if (res.success && res.cleanDataUrl) {
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? {
+                  ...p,
+                  dataUrl: res.cleanDataUrl,
+                  rawOriginalDataUrl: res.rawDataUrl || p.rawOriginalDataUrl || p.dataUrl,
+                  isCleaned: true,
+                  subjectId: res.subjectId || p.subjectId,
+                  topicId: res.topicId || p.topicId,
+                  subtopicName: res.subtopicName || p.subtopicName,
+                }
+              : p
+          )
+        );
+        if (res.topicName) {
+          setAiDetectionResult((prev) => ({
+            ...prev,
+            [item.tempId]: {
+              topicName: res.topicName!,
+              subtopicName: res.subtopicName || '',
+              confidence: res.confidence || 95,
+            },
+          }));
+        }
+      } else {
+        setErrorMsg(res.errorMessage || 'Yapay zekâ soruyu temizleyemedi. Lütfen tekrar deneyin.');
+      }
+    } catch (err: any) {
+      setErrorMsg('Yapay zekâ temizleme hatası: ' + (err?.message || ''));
+    } finally {
+      setCleaningTempId(null);
     }
   };
 
@@ -1004,12 +1083,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
 
                         <button
                           type="button"
-                          onClick={() => setShowAiGuidanceModal(true)}
-                          className="px-3.5 py-2 bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md transition"
-                          title="ChatGPT veya Gemini ile temizleme komutunu kopyalayın"
+                          disabled={isAiProcessing}
+                          onClick={handleCleanPreviewWithAi}
+                          className="px-3.5 py-2 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 shadow-md transition disabled:opacity-50"
+                          title="Sorudaki tüm kurşun kalem yazılarını, karalamaları ve işaretleri kaldırıp tertemiz halini oluşturur"
                         >
-                          <Bot className="w-3.5 h-3.5 text-amber-300" />
-                          🤖 AI ile Temizle
+                          {isAiProcessing ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                              <span>Temizleniyor...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                              <span>{capturedPreview.isCleaned ? '✨ Yeniden Temizle' : '✨ Karalamaları Temizle'}</span>
+                            </>
+                          )}
                         </button>
 
                         {capturedPreview.rawOriginalDataUrl && (
@@ -1017,11 +1106,12 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                             type="button"
                             onClick={() => {
                               const nextCleaned = !capturedPreview.isCleaned;
+                              const targetUrl = nextCleaned
+                                ? (capturedPreview.cleanDataUrl || capturedPreview.dataUrl)
+                                : (capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl);
                               setCapturedPreview({
                                 ...capturedPreview,
-                                dataUrl: nextCleaned
-                                  ? capturedPreview.dataUrl
-                                  : capturedPreview.rawOriginalDataUrl!,
+                                dataUrl: targetUrl,
                                 isCleaned: nextCleaned,
                               });
                             }}
@@ -1029,7 +1119,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                             title="Orijinal ve temiz hal arasında geçiş yapın"
                           >
                             <RefreshCw className="w-3.5 h-3.5 text-turquoise-400" />
-                            {capturedPreview.isCleaned ? 'Orijinali Göster' : 'Temiz Halini Göster'}
+                            {capturedPreview.isCleaned ? '📷 Orijinali Göster' : '✨ Temiz Hali Göster'}
                           </button>
                         )}
 
@@ -1267,37 +1357,38 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                             )}
                           </div>
 
-                          {/* Quick Clean / Revert Action */}
+                          {/* AI Clean Action */}
                           <button
                             type="button"
-                            onClick={() => handleToggleCleanItem(item)}
-                            className={`mt-1.5 w-full text-[11px] font-bold flex items-center justify-center gap-1 px-2 py-0.5 rounded border transition ${
-                              item.isCleaned
-                                ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
-                                : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
-                            }`}
-                            title={
-                              item.isCleaned
-                                ? 'Temizlendi. Tıklayarak orijinal fotoğrafı görebilir veya geri alabilirsiniz.'
-                                : 'Sorudaki karalama ve kurşun kalem izlerini temizleyin.'
-                            }
+                            disabled={cleaningTempId === item.tempId}
+                            onClick={() => handleAiCleanStagedItem(item)}
+                            className="mt-1.5 w-full text-[11px] font-bold flex items-center justify-center gap-1 px-2 py-1 rounded-lg border bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white shadow-xs transition disabled:opacity-60"
+                            title="Sorudaki tüm kurşun kalem yazılarını, karalamaları ve işaretleri kaldırıp tertemiz halini oluşturur"
                           >
-                            <Sparkles className="w-3 h-3 text-emerald-600" />
-                            {item.isCleaned ? '✨ Temiz (Orijinale Dön)' : '🪄 Otomatik Temizle'}
+                            {cleaningTempId === item.tempId ? (
+                              <>
+                                <RefreshCw className="w-3 h-3 animate-spin text-white" />
+                                <span>Temizleniyor...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3 h-3 text-amber-300" />
+                                <span>{item.isCleaned ? '✨ Yeniden Temizle' : '✨ AI ile Karalamaları Temizle'}</span>
+                              </>
+                            )}
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setGuidanceTargetItem(item);
-                              setShowAiGuidanceModal(true);
-                            }}
-                            className="mt-1 w-full text-[11px] font-bold flex items-center justify-center gap-1 px-2 py-0.5 rounded border bg-violet-50 hover:bg-violet-100 text-violet-800 border-violet-200 transition"
-                            title="ChatGPT veya Gemini ile soruyu tertemiz yaptırıp buraya aktarın"
-                          >
-                            <Bot className="w-3 h-3 text-violet-600" />
-                            🤖 AI ile Temizle
-                          </button>
+                          {item.rawOriginalDataUrl && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCleanItem(item)}
+                              className="mt-1 w-full text-[10px] font-semibold flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-slate-300 bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                              title="Orijinal fotoğraf ile temiz hal arasında geçiş yapın"
+                            >
+                              <RefreshCw className="w-3 h-3 text-slate-500" />
+                              <span>{item.isCleaned ? '📷 Orijinali Göster' : '✨ Temiz Hali Göster'}</span>
+                            </button>
+                          )}
 
                           <button
                             type="button"

@@ -11,7 +11,14 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-flash-latest';
+export const DEFAULT_MODEL = 'gemini-3-flash-preview';
+
+export const CANDIDATE_MODELS = [
+  'gemini-3-flash-preview',
+  'gemini-3.5-flash',
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+];
 
 export function getStoredGeminiApiKey(): string {
   try {
@@ -36,7 +43,13 @@ export function saveStoredGeminiApiKey(key: string): void {
 export function getStoredGeminiModel(): string {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
-    if (saved && !saved.includes('1.5') && !saved.includes('2.0') && !saved.includes('2.5')) {
+    if (
+      saved &&
+      !saved.includes('1.5') &&
+      !saved.includes('2.0') &&
+      !saved.includes('2.5') &&
+      !saved.includes('flash-latest')
+    ) {
       return saved;
     }
     return DEFAULT_MODEL;
@@ -463,82 +476,36 @@ export async function readImageFromClipboard(): Promise<string | null> {
 }
 
 /**
- * Attempts to automatically clean scribbles from question image using AI (Gemini Flash-Image).
+ * Attempts to automatically clean scribbles from question image using AI (Gemini Multimodal Reconstruction).
  */
 export async function cleanQuestionImageWithAi(dataUrl: string): Promise<CleanImageResult> {
   const geminiKey = getStoredGeminiApiKey();
 
-  if (geminiKey && geminiKey.trim()) {
-    try {
-      const cleanBase64 = dataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-      const mimeMatch = dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
-      const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${geminiKey.trim()}`;
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: AI_IMAGE_CLEANUP_SYSTEM_PROMPT },
-                {
-                  inline_data: {
-                    mime_type: mimeType,
-                    data: cleanBase64,
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const parts = data?.candidates?.[0]?.content?.parts || [];
-        for (const p of parts) {
-          if (p.inlineData && p.inlineData.data) {
-            const outMime = p.inlineData.mimeType || 'image/png';
-            return {
-              success: true,
-              cleanedDataUrl: `data:${outMime};base64,${p.inlineData.data}`,
-            };
-          }
-        }
-        return {
-          success: false,
-          errorMessage: 'Yapay zekâ yanıt verdi ancak görsel verisi döndürmedi.',
-        };
-      } else {
-        const errText = await response.text();
-        const isQuota =
-          response.status === 429 ||
-          errText.includes('quota') ||
-          errText.includes('free_tier') ||
-          errText.includes('RESOURCE_EXHAUSTED');
-        return {
-          success: false,
-          isQuotaError: isQuota,
-          errorMessage: isQuota
-            ? 'Google AI Studio geliştirici anahtarında görsel üretim modelleri (Flash-Image) için sınır 0 olarak kısıtlıdır. ChatGPT veya Gemini web uygulamasında oluşturulan temiz görseli "Panodan Yapıştır" butonuyla anında soruya aktarabilirsiniz.'
-            : `Gemini API hatası (${response.status}): ${errText.slice(0, 160)}`,
-        };
-      }
-    } catch (err: any) {
-      return {
-        success: false,
-        errorMessage: `İşlem hatası: ${err?.message || 'Bilinmeyen hata'}`,
-      };
-    }
+  if (!geminiKey || !geminiKey.trim()) {
+    return {
+      success: false,
+      errorMessage: 'Google Gemini API anahtarı tanımlanmamış.',
+    };
   }
 
-  return {
-    success: false,
-    errorMessage: 'Google Gemini API anahtarı tanımlanmamış.',
-  };
+  try {
+    const res = await processQuestionPhotoWithAi(dataUrl);
+    if (res.success && res.cleanDataUrl) {
+      return {
+        success: true,
+        cleanedDataUrl: res.cleanDataUrl,
+      };
+    }
+    return {
+      success: false,
+      errorMessage: res.errorMessage || 'Yapay zekâ yanıt verdi ancak temiz görsel üretemedi.',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      errorMessage: `İşlem hatası: ${err?.message || 'Bilinmeyen hata'}`,
+    };
+  }
 }
 
 /**
@@ -656,53 +623,69 @@ Output JSON only in this schema:
   "cleanSvg": string
 }`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey.trim()}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
+    const modelsToTry = [
+      model,
+      ...CANDIDATE_MODELS.filter((m) => m !== model),
+    ];
+
+    let parsed: any = null;
+    let lastError = '';
+
+    for (const currentModel of modelsToTry) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
               {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: cleanBase64,
-                },
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
-      }),
-    });
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        });
 
-    if (!response.ok) {
-      const errText = await response.text();
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `${currentModel} (${response.status}): ${errText.slice(0, 120)}`;
+          console.warn(`Model ${currentModel} returned ${response.status}, trying fallback model...`);
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJsonText) {
+          parsed = JSON.parse(rawJsonText);
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
+    }
+
+    if (!parsed) {
       return {
         success: false,
         cleanDataUrl: photoDataUrl,
         rawDataUrl: photoDataUrl,
-        errorMessage: `Gemini API hatası (${response.status}): ${errText.slice(0, 160)}`,
+        errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
       };
     }
 
-    const data = await response.json();
-    const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawJsonText) {
-      return {
-        success: false,
-        cleanDataUrl: photoDataUrl,
-        rawDataUrl: photoDataUrl,
-        errorMessage: 'Yapay zekâdan geçerli yanıt alınamadı.',
-      };
-    }
-
-    const parsed = JSON.parse(rawJsonText);
     const qBox = parsed.question_box_2d;
 
     // Crop camera photo according to AI bounding box
@@ -724,8 +707,16 @@ Output JSON only in this schema:
       const svgEnd = svgCode.lastIndexOf('</svg>');
       if (svgStart !== -1 && svgEnd !== -1) {
         svgCode = svgCode.slice(svgStart, svgEnd + 6);
-        cleanDataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svgCode)}`;
-        isSvgCleaned = true;
+        try {
+          const b64Svg = typeof window !== 'undefined'
+            ? window.btoa(unescape(encodeURIComponent(svgCode)))
+            : Buffer.from(svgCode).toString('base64');
+          cleanDataUrl = `data:image/svg+xml;base64,${b64Svg}`;
+          isSvgCleaned = true;
+        } catch {
+          cleanDataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svgCode)}`;
+          isSvgCleaned = true;
+        }
       }
     }
 
