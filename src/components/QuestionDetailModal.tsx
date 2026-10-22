@@ -283,15 +283,14 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
             setSaveBanner('Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.');
           }
           return;
+        } else {
+          setSaveBanner('Fotoğraf yapay zekâ ile temizlenemedi; soru orijinal haliyle korundu.');
+          return;
         }
+      } else {
+        setSaveBanner('⚠️ Karalamaları temizlemek için Ayarlar bölümünden Gemini API anahtarınızı girin.');
+        return;
       }
-
-      const cleaned = await autoCleanStudentScribbles(src);
-      await onSavePhotoAsset({
-        ...activePhoto,
-        croppedDataUrl: cleaned,
-      });
-      setSaveBanner('✨ Soru fotoğrafındaki karalamalar ve kurşun kalem izleri otomatik olarak temizlendi ve kaydedildi!');
     } catch (err: any) {
       setSaveBanner('Temizleme sırasında hata: ' + (err?.message || 'Bilinmeyen hata'));
     } finally {

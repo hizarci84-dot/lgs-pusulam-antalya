@@ -570,12 +570,13 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         }
       }
 
+      const isVerifiedClean = isCleaned && cleanupStatus === 'success' && !overlapWarn && Boolean(finalDataUrl);
       setCapturedPreview({
-        dataUrl: finalDataUrl,
+        dataUrl: isVerifiedClean ? finalDataUrl : croppedRawDataUrl,
         cleanDataUrl: isCleaned ? finalDataUrl : undefined,
         rawOriginalDataUrl: croppedRawDataUrl,
         originalUploadedUrl: rawDataUrl,
-        isCleaned,
+        isCleaned: isVerifiedClean,
         cleanupStatus,
         statusMessage,
         cleanedMarkCount,
@@ -606,12 +607,13 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
       const cleanRes = await cleanCroppedQuestionImage(src, capturedPreview.subjectId || batchSubjectId);
       if (cleanRes.success && cleanRes.cleanDataUrl) {
+        const isVerifiedClean = cleanRes.cleanupStatus === 'success' && !cleanRes.overlapWarning;
         setCapturedPreview({
           ...capturedPreview,
-          dataUrl: cleanRes.cleanDataUrl,
+          dataUrl: isVerifiedClean ? cleanRes.cleanDataUrl : (capturedPreview.rawOriginalDataUrl || src),
           cleanDataUrl: cleanRes.cleanDataUrl,
           rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || src,
-          isCleaned: cleanRes.cleanupStatus === 'success' || cleanRes.cleanupStatus === 'partial',
+          isCleaned: isVerifiedClean,
           cleanupStatus: cleanRes.cleanupStatus,
           statusMessage: cleanRes.statusMessage,
           cleanedMarkCount: cleanRes.cleanedMarkCount,
@@ -648,15 +650,16 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = item.rawOriginalDataUrl || item.dataUrl;
       const res = await cleanCroppedQuestionImage(src, item.subjectId);
       if (res.success && res.cleanDataUrl) {
+        const isVerifiedClean = res.cleanupStatus === 'success' && !res.overlapWarning;
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
               ? {
                   ...p,
-                  dataUrl: res.cleanDataUrl,
+                  dataUrl: isVerifiedClean ? res.cleanDataUrl : (p.rawOriginalDataUrl || src),
                   cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: p.rawOriginalDataUrl || src,
-                  isCleaned: res.cleanupStatus === 'success' || res.cleanupStatus === 'partial',
+                  isCleaned: isVerifiedClean,
                   cleanupStatus: res.cleanupStatus,
                   statusMessage: res.statusMessage,
                   cleanedMarkCount: res.cleanedMarkCount,
@@ -862,13 +865,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           }));
         }
 
+        const isVerifiedClean = isCleaned && cleanupStatus === 'success' && !overlapWarn && Boolean(finalDataUrl);
         added.push({
           tempId,
-          dataUrl: finalDataUrl,
+          dataUrl: isVerifiedClean ? finalDataUrl : rawDataUrl,
           cleanDataUrl: isCleaned ? finalDataUrl : undefined,
           rawOriginalDataUrl: rawDataUrl,
           originalUploadedUrl: compressed.dataUrl,
-          isCleaned,
+          isCleaned: isVerifiedClean,
           cleanupStatus,
           statusMessage,
           cleanedMarkCount,
@@ -907,17 +911,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         )
       );
     } else {
-      // Restore clean version (either previously cleaned or re-clean)
+      // Restore clean version (either previously cleaned or re-clean with precision AI)
       try {
         let cleaned = item.cleanDataUrl;
         if (!cleaned) {
           const src = item.rawOriginalDataUrl || item.dataUrl;
-          cleaned = await autoCleanStudentScribbles(src);
+          const cleanRes = await cleanCroppedQuestionImage(src, item.subjectId);
+          if (cleanRes.success && cleanRes.cleanDataUrl) {
+            cleaned = cleanRes.cleanDataUrl;
+          } else {
+            cleaned = src;
+          }
         }
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
-              ? { ...p, dataUrl: cleaned!, cleanDataUrl: cleaned!, isCleaned: true }
+              ? { ...p, dataUrl: cleaned!, cleanDataUrl: cleaned!, isCleaned: Boolean(cleaned && cleaned !== (p.rawOriginalDataUrl || p.dataUrl)) }
               : p
           )
         );
@@ -962,13 +971,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         const qId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const pId = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+        const isVerifiedClean = item.isCleaned && item.cleanupStatus === 'success' && !item.overlapWarning && Boolean(item.cleanDataUrl);
         newAssets.push({
           id: pId,
           studentId: student.id,
           examId: selectedExamId,
           questionId: qId,
           originalDataUrl: item.originalUploadedUrl || item.rawOriginalDataUrl || item.dataUrl,
-          croppedDataUrl: item.isCleaned && item.cleanDataUrl ? item.cleanDataUrl : (item.rawOriginalDataUrl || item.dataUrl),
+          croppedDataUrl: isVerifiedClean ? item.cleanDataUrl! : (item.rawOriginalDataUrl || item.dataUrl),
           cropRect: null,
           rotation: 0,
           mimeType: item.mimeType,

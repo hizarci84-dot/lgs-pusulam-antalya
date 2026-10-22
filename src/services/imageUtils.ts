@@ -465,9 +465,38 @@ export function inpaintHandwritingRegions(
         desc.includes('cember') ||
         desc.includes('çember') ||
         desc.includes('halka') ||
-        desc.includes('şık') ||
-        desc.includes('sik') ||
         desc.includes('circle'));
+
+    // STRICT MATH & ANSWER CHOICES PRESERVATION:
+    // Any scribble crossing answer choice cards (A, B, C, D), formulas, negative exponents, or fractions
+    // must NOT be subject to broad inpainting that damages printed mathematical expressions.
+    // Preserve authentic original photograph details in these sensitive regions!
+    const isAnswerChoicesZone = y0 >= height * 0.52 || yminNorm >= 520;
+    const mentionsChoicesOrMath =
+      desc.includes('şık') ||
+      desc.includes('sik') ||
+      desc.includes('seçenek') ||
+      desc.includes('secenek') ||
+      desc.includes('kart') ||
+      desc.includes('kutu') ||
+      desc.includes('formül') ||
+      desc.includes('formul') ||
+      desc.includes('üslü') ||
+      desc.includes('uslu') ||
+      desc.includes('kesir') ||
+      desc.includes('köklü') ||
+      desc.includes('koklu') ||
+      desc.includes('denklem') ||
+      desc.includes('tablo') ||
+      desc.includes('c şık') ||
+      desc.includes('d şık') ||
+      desc.includes('a şık') ||
+      desc.includes('b şık');
+
+    if (boxType !== 'safe' && !isChoiceMarkOrCircle && (isAnswerChoicesZone || mentionsChoicesOrMath)) {
+      preservedHighRisk++;
+      continue;
+    }
 
     // 2. Estimate adaptive local paper color around the bounding box perimeter
     const borderSamples: Array<{ r: number; g: number; b: number; lum: number }> = [];
@@ -480,7 +509,7 @@ export function inpaintHandwritingRegions(
         const b = pixels[idx + 2];
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
         const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-        if (chroma < 28 && lum > 60) {
+        if (chroma < 18 && lum > 60) {
           borderSamples.push({ r, g, b, lum });
         }
       }
@@ -513,9 +542,7 @@ export function inpaintHandwritingRegions(
       paperLum = chosen.lum;
     }
 
-    const pencilMaxLum = Math.max(120, paperLum * 0.92);
-
-    // 3. Scan box and identify pencil / scribble pixels
+    // 3. Scan box and identify pencil / scribble pixels with strict narrow stroke isolation
     const isScribble = new Uint8Array(boxW * boxH);
     let boxScribbleCount = 0;
 
@@ -530,53 +557,56 @@ export function inpaintHandwritingRegions(
         const minC = Math.min(r, g, b);
         const chroma = maxC - minC;
 
-        // Protect colored artwork (roses, vases, graphs, colored parcels)
-        if (protectColored && chroma > 28) {
+        // Protect colored artwork and colored cards (roses, vases, graphs, colored answer cards A/B/C/D)
+        // Chroma > 10 strictly shields pastel and colored cards from any inpainting!
+        if (protectColored && chroma > 10) {
           continue;
         }
 
         let isMark = false;
 
         if (boxType === 'safe') {
-          // Safe region: no printed question text is in this box (margins, white space calculations).
-          // Clean all graphite strokes and student pen marks!
-          if (lum < paperLum * 0.90 && chroma <= 28) {
+          // Safe region: margins, whitespace, calculations not overlapping text
+          // Stroke must be darker than regional paper
+          if (lum < paperLum * 0.86 && chroma <= 18) {
             isMark = true;
-          } else if (chroma > 22 && lum < paperLum * 0.95) {
+          } else if (chroma > 22 && lum < paperLum * 0.92) {
             isMark = true; // student colored pen
           }
         } else if (isUnderline) {
-          // Underlines sit below the line of text. Target only the lower 42% of the text bounding box.
-          const underlineYThreshold = y0 + Math.round(boxH * 0.58);
+          // Underlines sit below the line of text. Target only the bottom 38% of the bounding box.
+          const underlineYThreshold = y0 + Math.round(boxH * 0.62);
           if (by >= underlineYThreshold) {
-            if (lum < paperLum * 0.92 && chroma <= 28) {
+            if (lum < paperLum * 0.86 && lum >= Math.min(65, paperLum * 0.42) && chroma <= 16) {
               isMark = true;
-            } else if (chroma > 22 && lum < paperLum * 0.95) {
+            } else if (chroma > 22 && lum < paperLum * 0.92) {
               isMark = true;
             }
           }
         } else if (isChoiceMarkOrCircle) {
           // Choice circle: student draws a circle loop around the choice letter (A, B, C, D).
-          // Protect the central letter by targeting only the outer ring of the bounding box!
+          // Protect the central letter and card content by targeting ONLY the outer perimeter ring!
           const topBand = y0 + Math.round(boxH * 0.22);
           const botBand = y1 - Math.round(boxH * 0.22);
           const leftBand = x0 + Math.round(boxW * 0.20);
           const rightBand = x1 - Math.round(boxW * 0.20);
           const isOuterRing = by < topBand || by > botBand || bx < leftBand || bx > rightBand;
           if (isOuterRing) {
-            if (lum < paperLum * 0.92 && chroma <= 28) {
+            if (lum < paperLum * 0.88 && lum >= Math.min(65, paperLum * 0.42) && chroma <= 16) {
               isMark = true;
-            } else if (chroma > 22 && lum < paperLum * 0.95) {
+            } else if (chroma > 24 && lum < paperLum * 0.90) {
               isMark = true;
             }
           }
         } else {
-          // General recoverable region (diagonal scribbles crossing question or whitespace):
-          // Protect intense black printed typography (lum < 52 or lum < paperLum * 0.38)
-          const printProtectLum = Math.min(52, paperLum * 0.38);
-          if (lum >= printProtectLum && lum <= pencilMaxLum && chroma <= 28) {
+          // General recoverable region (outside sensitive choices/math):
+          // Narrow stroke detection:
+          // - Darker than surrounding paper/background: lum < paperLum * 0.82
+          // - NOT deep black printed typography: lum >= Math.min(60, paperLum * 0.42)
+          // - Low chroma: chroma <= 16
+          if (lum < paperLum * 0.82 && lum >= Math.min(60, paperLum * 0.42) && chroma <= 16) {
             isMark = true;
-          } else if (chroma > 25 && lum <= pencilMaxLum && lum > 35) {
+          } else if (chroma > 25 && lum <= paperLum * 0.85 && lum > 45) {
             isMark = true; // student colored pen
           }
         }
@@ -803,8 +833,71 @@ export function inpaintQuestionDataUrl(
         ctx.drawImage(img, 0, 0);
         const imgData = ctx.getImageData(0, 0, width, height);
 
+        // Immutable baseline backup of the original cropped photograph
+        const pristineOriginalPixels = new Uint8ClampedArray(imgData.data);
+
         // Perform precision inpainting on the pixel array
         const inpaintResult = inpaintHandwritingRegions(imgData.data, width, height, boxes);
+
+        // OBJECTIVE CONTENT INTEGRITY VERIFICATION:
+        // Ensure printed mathematical expressions, negative exponents, fractions,
+        // digits, and colored answer card backgrounds (C, D, etc.) were not damaged.
+        const sensitiveYStart = Math.floor(height * 0.48);
+        let pristineDarkCount = 0;
+        let inpaintedDarkCount = 0;
+        let pristineChromaSum = 0;
+        let inpaintedChromaSum = 0;
+        let coloredPixelsCount = 0;
+
+        for (let y = sensitiveYStart; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const idx = (y * width + x) * 4;
+
+            const pr = pristineOriginalPixels[idx];
+            const pg = pristineOriginalPixels[idx + 1];
+            const pb = pristineOriginalPixels[idx + 2];
+            const pLum = 0.299 * pr + 0.587 * pg + 0.114 * pb;
+            const pChroma = Math.max(pr, pg, pb) - Math.min(pr, pg, pb);
+
+            const ir = imgData.data[idx];
+            const ig = imgData.data[idx + 1];
+            const ib = imgData.data[idx + 2];
+            const iLum = 0.299 * ir + 0.587 * ig + 0.114 * ib;
+            const iChroma = Math.max(ir, ig, ib) - Math.min(ir, ig, ib);
+
+            if (pLum < 75) pristineDarkCount++;
+            if (iLum < 75) inpaintedDarkCount++;
+
+            if (pChroma > 10) {
+              pristineChromaSum += pChroma;
+              inpaintedChromaSum += iChroma;
+              coloredPixelsCount++;
+            }
+          }
+        }
+
+        let integrityViolation = false;
+        let integrityReason = '';
+
+        // If printed dark ink in choices or formula zone decreased by > 2%, printed math was damaged!
+        if (pristineDarkCount > 40 && (pristineDarkCount - inpaintedDarkCount) / pristineDarkCount > 0.02) {
+          integrityViolation = true;
+          integrityReason = 'Cevap şıklarındaki veya formüllerdeki basılı yazılar zarar gördüğü için temizleme geri alındı.';
+        }
+
+        // If colored card chroma dropped by > 5%, colored card background was damaged or bleached!
+        if (coloredPixelsCount > 80 && (pristineChromaSum - inpaintedChromaSum) / pristineChromaSum > 0.05) {
+          integrityViolation = true;
+          integrityReason = 'Renkli cevap kartlarının arka planı zarar gördüğü için temizleme geri alındı.';
+        }
+
+        if (integrityViolation) {
+          console.warn('[AI Clean Content Integrity Check REJECTED]', integrityReason);
+          // 100% rollback to authentic pristine original photograph!
+          imgData.data.set(pristineOriginalPixels);
+          inpaintResult.modifiedPixelCount = 0;
+          inpaintResult.preservedHighRiskBoxesCount = Math.max(1, inpaintResult.preservedHighRiskBoxesCount);
+        }
 
         // Quality check
         const qCheck = validateCleanedImageQuality(
@@ -1069,8 +1162,8 @@ export function cleanImageDataPixels(
       }
 
       // 2. Colored printed illustrations (roses, vases, leaves, charts, colored geometry)
-      // When chroma > 14, preserve the original colors & artwork faithfully!
-      if (preserveIllustrations && chroma > 14) {
+      // When chroma > 10, preserve the original colors & artwork faithfully!
+      if (preserveIllustrations && chroma > 10) {
         const bgNorm = Math.min(1.25, 255 / Math.max(1, localBg));
         data[idx] = Math.min(255, Math.round(r * bgNorm));
         data[idx + 1] = Math.min(255, Math.round(g * bgNorm));
@@ -1191,31 +1284,11 @@ export function cropRotateAndCleanQuestion(params: {
 
         const rawCroppedDataUrl = uprightCanvas.toDataURL('image/jpeg', 0.90);
 
-        // 4. Create clean canvas with adaptive illumination & pencil removal
-        const cleanCanvas = document.createElement('canvas');
-        cleanCanvas.width = uprightCanvas.width;
-        cleanCanvas.height = uprightCanvas.height;
-        const cleanCtx = cleanCanvas.getContext('2d');
-        if (!cleanCtx) {
-          resolve({ cleanDataUrl: rawCroppedDataUrl, rawCroppedDataUrl });
-          return;
-        }
-
-        cleanCtx.fillStyle = '#ffffff';
-        cleanCtx.fillRect(0, 0, cleanCanvas.width, cleanCanvas.height);
-        cleanCtx.drawImage(uprightCanvas, 0, 0);
-
-        // 5. Apply pixel illumination & paper whitening filter
-        const imgData = cleanCtx.getImageData(0, 0, cleanCanvas.width, cleanCanvas.height);
-        cleanImageDataPixels(imgData.data, cleanCanvas.width, cleanCanvas.height, {
-          mode: 'balanced',
-          preserveIllustrations: params.preserveIllustrations !== false,
-          cleanBorders: true,
-        });
-        cleanCtx.putImageData(imgData, 0, 0);
-
-        const cleanDataUrl = cleanCanvas.toDataURL('image/jpeg', 0.92);
-        resolve({ cleanDataUrl, rawCroppedDataUrl });
+        // Pristine original cropped photograph:
+        // Do NOT run destructive whitening filters or pixel bleaching over the question!
+        // This guarantees that colored cards (A, B, C, D), math formulas, negative exponents,
+        // fractions, and printed text remain 100% authentic and untouched.
+        resolve({ cleanDataUrl: rawCroppedDataUrl, rawCroppedDataUrl });
       } catch (err) {
         reject(err);
       }
