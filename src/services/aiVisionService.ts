@@ -726,6 +726,75 @@ export async function cleanCroppedQuestionImage(
     const mimeMatch = aiInputDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
+    // =========================================================================
+    // STAGE 1: Attempt Genuine Image-Editing Model Endpoint
+    // =========================================================================
+    const EDIT_PROMPT =
+      "Edit the supplied original photograph. Remove only the student's handwritten pencil and pen marks, including diagonal crossing lines, X marks, circles, underlines, and margin calculations. Restore the paper underneath the removed marks as naturally as possible. Preserve the original printed mathematics question exactly, including all words, Turkish characters, numbers, negative signs, exponents, fractions, answer choices, colored backgrounds, diagrams, line thicknesses, illustrations, borders, and page layout. Do not rewrite, redraw, regenerate, sharpen, recolor, retype, or otherwise alter any unaffected part of the question. Do not invent mathematical content. Return the edited image.";
+
+    const imageEditModels = [
+      'gemini-2.5-flash-image',
+      'gemini-3.1-flash-image',
+      'gemini-3-pro-image',
+    ];
+
+    let directEditedDataUrl: string | null = null;
+    let imageApiError = '';
+
+    for (const imgModel of imageEditModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${geminiKey.trim()}`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(30000),
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: EDIT_PROMPT },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+          }),
+        });
+
+        if (res.ok) {
+          const imgJson = await res.json();
+          const parts = imgJson?.candidates?.[0]?.content?.parts || [];
+          for (const p of parts) {
+            const rawImg = p.inline_data || p.inlineData;
+            if (rawImg && rawImg.data) {
+              directEditedDataUrl = `data:${rawImg.mime_type || 'image/jpeg'};base64,${rawImg.data}`;
+              console.log(`[cleanCroppedQuestionImage] Direct image-editing succeeded with model ${imgModel}`);
+              break;
+            }
+          }
+          if (directEditedDataUrl) break;
+        } else {
+          const errText = await res.text();
+          imageApiError = `${imgModel} (${res.status}): ${errText.slice(0, 100)}`;
+        }
+      } catch (err: any) {
+        imageApiError = err?.message || String(err);
+      }
+    }
+
+    if (imageApiError && !directEditedDataUrl) {
+      console.info(
+        `[cleanCroppedQuestionImage] Direct image-generation endpoint unavailable (${imageApiError}). Using precision mask-controlled localized inpainting with multimodal vision detection.`
+      );
+    }
+
+    // =========================================================================
+    // STAGE 2: Precision Mask-Controlled Localized Inpainting with Vision Detection
+    // =========================================================================
     const prompt = `Sen MEB 8. Sınıf LGS sınav soruları üzerinde uzmanlaşmış bir görsel analiz ve kurşun kalem temizleme asistanısın.
 Sana kırpılmış bir LGS soru görseli verildi. [0, 0, 1000, 1000] koordinat sistemi tam olarak bu soru görselini temsil etmektedir (ek kırpma veya döndürme yapma).
 

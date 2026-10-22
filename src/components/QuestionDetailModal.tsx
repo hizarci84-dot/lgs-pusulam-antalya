@@ -37,6 +37,7 @@ import {
 import { processQuestionReviewOutcome } from '../services/patternEngine';
 import {
   analyzeFullQuestionWithGemini,
+  cleanCroppedQuestionImage,
   getStoredGeminiApiKey,
   readImageFromClipboard,
 } from '../services/aiVisionService';
@@ -264,6 +265,27 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
     setSaveBanner('Kurşun kalem karalamaları ve işaretler temizleniyor...');
     try {
       const src = activePhoto.croppedDataUrl || activePhoto.originalDataUrl;
+      const apiKey = getStoredGeminiApiKey();
+      if (apiKey) {
+        const cleanRes = await cleanCroppedQuestionImage(src, question.subjectId);
+        if (cleanRes.success && cleanRes.cleanDataUrl) {
+          await onSavePhotoAsset({
+            ...activePhoto,
+            croppedDataUrl: cleanRes.cleanDataUrl,
+          });
+          if (cleanRes.cleanupStatus === 'success') {
+            setSaveBanner('✨ Soru fotoğrafındaki karalamalar ve kurşun kalem izleri başarıyla temizlendi ve kaydedildi!');
+          } else if (cleanRes.cleanupStatus === 'partial') {
+            setSaveBanner('⚠️ ' + (cleanRes.overlapMessage || 'Kısmi temizleme yapıldı. Basılı alanlar korundu; kalan kısımları Daksil ile silebilirsiniz.'));
+          } else if (cleanRes.cleanupStatus === 'manual_needed') {
+            setSaveBanner('🔍 ' + (cleanRes.statusMessage || 'Karalamalar basılı metin veya formülle yoğun çakıştığı için silinmedi. Daksil ile temizleyebilirsiniz.'));
+          } else {
+            setSaveBanner('Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.');
+          }
+          return;
+        }
+      }
+
       const cleaned = await autoCleanStudentScribbles(src);
       await onSavePhotoAsset({
         ...activePhoto,
