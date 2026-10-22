@@ -670,6 +670,284 @@ export function cropImageDataUrlByBox(
   });
 }
 
+export interface CleanCroppedQuestionResult {
+  success: boolean;
+  cleanDataUrl: string;
+  rawOriginalDataUrl: string;
+  cleanupStatus: CleanupStatus;
+  statusMessage: string;
+  cleanedMarkCount: number;
+  preservedRiskMarkCount: number;
+  overlapWarning: boolean;
+  overlapMessage: string;
+  detectedSubject?: SubjectId;
+  topicId?: string;
+  topicName?: string;
+  subtopicName?: string;
+  detectedTopicName?: string;
+  detectedSubtopicName?: string;
+  confidence?: number;
+  errorMessage?: string;
+}
+
+/**
+ * Dedicated AI handwriting cleanup engine for already-cropped questions.
+ * Operates directly on the cropped question coordinate frame ([0, 0, 1000, 1000]),
+ * eliminating bounding box drift from whole-photo re-cropping.
+ * Preserves the original cropped question as an immutable base for undo/recovery.
+ */
+export async function cleanCroppedQuestionImage(
+  croppedDataUrl: string,
+  subjectHint?: SubjectId
+): Promise<CleanCroppedQuestionResult> {
+  const geminiKey = getStoredGeminiApiKey();
+  const model = getStoredGeminiModel();
+
+  if (!geminiKey || !geminiKey.trim()) {
+    return {
+      success: false,
+      cleanDataUrl: croppedDataUrl,
+      rawOriginalDataUrl: croppedDataUrl,
+      cleanupStatus: 'unchanged',
+      statusMessage: 'Gemini API anahtarı bulunamadı.',
+      cleanedMarkCount: 0,
+      preservedRiskMarkCount: 0,
+      overlapWarning: false,
+      overlapMessage: '',
+      errorMessage: 'Gemini API anahtarı bulunamadı.',
+    };
+  }
+
+  const startTime = Date.now();
+
+  try {
+    const aiInputDataUrl = await downscaleDataUrlForAi(croppedDataUrl, 1024);
+    const cleanBase64 = aiInputDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    const mimeMatch = aiInputDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    const prompt = `Sen MEB 8. Sınıf LGS sınav soruları üzerinde uzmanlaşmış bir görsel analiz ve kurşun kalem temizleme asistanısın.
+Sana kırpılmış bir LGS soru görseli verildi. [0, 0, 1000, 1000] koordinat sistemi tam olarak bu soru görselini temsil etmektedir (ek kırpma veya döndürme yapma).
+
+GÖREVİN:
+1. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X veya çapraz karalama çizgilerini tespit et.
+   Her bir karalama için:
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte tam ve sıkı koordinatlar).
+   - "type":
+       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
+       * "recoverable": Şık daireleme, alt çizgi, şıkların veya metnin üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
+       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
+   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çizgi", "Metin üzerindeki çapraz karalama").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+2. "overlap_warning": Basılı soru metni, formül veya şekille yoğun çakışma riski varsa veya high_risk varsa true, aksi halde false.
+3. "overlap_message": Kullanıcıya gösterilecek bilgilendirici açıklama.
+4. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+5. "detectedTopicName": MEB müfredatındaki konu adı
+6. "detectedSubtopicName": MEB alt kazanım adı
+7. "confidence": Güven puanı (0-100)
+
+Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
+{
+  "handwritten_marks": [
+    {
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "type": "safe" | "recoverable" | "high_risk",
+      "description": "string"
+    }
+  ],
+  "handwritten_marks_boxes": [[ymin, xmin, ymax, xmax]],
+  "overlap_warning": false,
+  "overlap_message": "",
+  "detectedSubject": "matematik",
+  "detectedTopicName": "Çarpanlar ve Katlar",
+  "detectedSubtopicName": "En Büyük Ortak Bölen (EBOB) ve En Küçük Ortak Kat (EKOK)",
+  "confidence": 95
+}`;
+
+    const modelsToTry = [
+      model,
+      ...CANDIDATE_MODELS.filter((m) => m !== model),
+    ];
+
+    let parsed: any = null;
+    let lastError = '';
+    let usedModel = model;
+
+    for (const currentModel of modelsToTry) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+              thinkingConfig: { thinkingBudget: 1 },
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `${currentModel} (${response.status}): ${errText.slice(0, 120)}`;
+          console.warn(`cleanCroppedQuestionImage: ${currentModel} returned ${response.status}, trying fallback...`);
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJsonText) {
+          parsed = JSON.parse(rawJsonText);
+          usedModel = currentModel;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
+    }
+
+    if (!parsed) {
+      return {
+        success: false,
+        cleanDataUrl: croppedDataUrl,
+        rawOriginalDataUrl: croppedDataUrl,
+        cleanupStatus: 'manual_needed',
+        statusMessage: `Yapay zekâ yanıt veremedi (${lastError})`,
+        cleanedMarkCount: 0,
+        preservedRiskMarkCount: 0,
+        overlapWarning: false,
+        overlapMessage: '',
+        errorMessage: `Yapay zekâ yanıt veremedi (${lastError}). Daksil aracıyla elle temizleyebilirsiniz.`,
+      };
+    }
+
+    const rawMarks: any[] =
+      Array.isArray(parsed.handwritten_marks) && parsed.handwritten_marks.length > 0
+        ? parsed.handwritten_marks
+        : Array.isArray(parsed.handwritten_marks_boxes)
+        ? parsed.handwritten_marks_boxes
+        : [];
+
+    const boxes: Array<InpaintRegionBox> = [];
+    for (const m of rawMarks) {
+      if (!m) continue;
+      let b = m;
+      let markType: 'safe' | 'recoverable' | 'high_risk' = 'recoverable';
+      let desc = '';
+
+      if (typeof m === 'object' && !Array.isArray(m)) {
+        b = m.box_2d || [m.ymin, m.xmin, m.ymax, m.xmax];
+        markType = m.type || 'recoverable';
+        desc = m.description || '';
+      }
+
+      if (Array.isArray(b) && b.length === 4) {
+        boxes.push({
+          ymin: Math.max(0, Math.min(1000, Number(b[0]))),
+          xmin: Math.max(0, Math.min(1000, Number(b[1]))),
+          ymax: Math.max(0, Math.min(1000, Number(b[2]))),
+          xmax: Math.max(0, Math.min(1000, Number(b[3]))),
+          type: markType,
+          description: desc,
+        });
+      }
+    }
+
+    const inpaintRes = await inpaintQuestionDataUrl(croppedDataUrl, boxes, {
+      overlapWarning: Boolean(parsed.overlap_warning),
+      overlapMessage: parsed.overlap_message,
+    });
+
+    console.log('[cleanCroppedQuestionImage Completed]', {
+      modelUsed: usedModel,
+      boxesDetected: boxes.length,
+      cleanedBoxes: inpaintRes.cleanedBoxesCount,
+      preservedRisk: inpaintRes.preservedHighRiskBoxesCount,
+      modifiedPixels: inpaintRes.cleanedPixelCount,
+      cleanupStatus: inpaintRes.cleanupStatus,
+      durationMs: Date.now() - startTime,
+    });
+
+    // Resolve curriculum topic & subtopic
+    let finalSubject: SubjectId = subjectHint || 'matematik';
+    const subStr = (parsed.detectedSubject || '').toLowerCase();
+    if (subStr.includes('mat')) finalSubject = 'matematik';
+    else if (subStr.includes('turk') || subStr.includes('türk')) finalSubject = 'turkce';
+    else if (subStr.includes('fen')) finalSubject = 'fen';
+    else if (subStr.includes('ink') || subStr.includes('tarih')) finalSubject = 'inkilap';
+    else if (subStr.includes('din')) finalSubject = 'din';
+    else if (subStr.includes('ing') || subStr.includes('dil')) finalSubject = 'ingilizce';
+
+    const subjectTopics = getTopicsBySubject(finalSubject);
+    const matchedTopic = subjectTopics.find(
+      (t) =>
+        t.topicName.toLowerCase().includes((parsed.detectedTopicName || '').toLowerCase()) ||
+        (parsed.detectedTopicName || '').toLowerCase().includes(t.topicName.toLowerCase())
+    ) || subjectTopics[0];
+
+    let finalSubtopicName = (parsed.detectedSubtopicName || '').trim();
+    if (matchedTopic && matchedTopic.subtopics.length > 0) {
+      const lowerCandidate = finalSubtopicName.toLocaleLowerCase('tr-TR');
+      const foundSub = matchedTopic.subtopics.find((st) => {
+        const lowerSt = st.toLocaleLowerCase('tr-TR');
+        return lowerSt === lowerCandidate || lowerCandidate.includes(lowerSt) || lowerSt.includes(lowerCandidate);
+      });
+      if (foundSub) {
+        finalSubtopicName = foundSub;
+      } else if (!finalSubtopicName) {
+        finalSubtopicName = matchedTopic.subtopics[0];
+      }
+    }
+
+    return {
+      success: true,
+      cleanDataUrl: inpaintRes.cleanDataUrl,
+      rawOriginalDataUrl: croppedDataUrl,
+      cleanupStatus: inpaintRes.cleanupStatus,
+      statusMessage: inpaintRes.statusMessage,
+      cleanedMarkCount: inpaintRes.cleanedBoxesCount,
+      preservedRiskMarkCount: inpaintRes.preservedHighRiskBoxesCount,
+      overlapWarning: Boolean(parsed.overlap_warning),
+      overlapMessage: parsed.overlap_message || '',
+      detectedSubject: finalSubject,
+      topicId: matchedTopic?.id || '',
+      topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
+      subtopicName: finalSubtopicName,
+      detectedTopicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
+      detectedSubtopicName: finalSubtopicName,
+      confidence: parsed.confidence || 95,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      cleanDataUrl: croppedDataUrl,
+      rawOriginalDataUrl: croppedDataUrl,
+      cleanupStatus: 'manual_needed',
+      statusMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
+      cleanedMarkCount: 0,
+      preservedRiskMarkCount: 0,
+      overlapWarning: false,
+      overlapMessage: '',
+      errorMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
+    };
+  }
+}
+
 export interface AiAutoCleanAndCropResult {
   success: boolean;
   cleanDataUrl: string;

@@ -32,6 +32,7 @@ import {
 import { getTodayDateStr } from '../services/patternEngine';
 import {
   CHATGPT_CLEANUP_PROMPT_TR,
+  cleanCroppedQuestionImage,
   cleanQuestionImageWithAi,
   detectQuestionTopicWithAi,
   getStoredGeminiApiKey,
@@ -599,35 +600,33 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const handleCleanPreviewWithAi = async () => {
     if (!capturedPreview) return;
     setIsAiProcessing(true);
-    setAiProcessingNotice('✨ Yapay Zekâ soruyu otomatik kırpıyor ve karalamaları temizliyor...');
+    setAiProcessingNotice('✨ Yapay Zekâ sorudaki kurşun kalem karalamalarını ve işaretleri temizliyor...');
     setErrorMsg(null);
     try {
       const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
-      const aiRes = await processQuestionPhotoWithAi(src, capturedPreview.subjectId || batchSubjectId);
-      if (aiRes.success && aiRes.cleanDataUrl) {
+      const cleanRes = await cleanCroppedQuestionImage(src, capturedPreview.subjectId || batchSubjectId);
+      if (cleanRes.success && cleanRes.cleanDataUrl) {
         setCapturedPreview({
           ...capturedPreview,
-          dataUrl: aiRes.cleanDataUrl,
-          cleanDataUrl: aiRes.cleanDataUrl,
-          rawOriginalDataUrl: aiRes.rawDataUrl || capturedPreview.rawOriginalDataUrl || src,
-          isCleaned: aiRes.cleanupStatus === 'success' || aiRes.cleanupStatus === 'partial',
-          cleanupStatus: aiRes.cleanupStatus,
-          statusMessage: aiRes.statusMessage,
-          cleanedMarkCount: aiRes.cleanedMarkCount,
-          preservedRiskMarkCount: aiRes.preservedRiskMarkCount,
-          overlapWarning: aiRes.overlapWarning,
-          overlapMessage: aiRes.overlapMessage,
-          subjectId: aiRes.subjectId || capturedPreview.subjectId,
-          topicId: aiRes.topicId || capturedPreview.topicId,
-          topicName: aiRes.topicName || capturedPreview.topicName,
-          subtopicName: aiRes.subtopicName || capturedPreview.subtopicName,
+          dataUrl: cleanRes.cleanDataUrl,
+          cleanDataUrl: cleanRes.cleanDataUrl,
+          rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || src,
+          isCleaned: cleanRes.cleanupStatus === 'success' || cleanRes.cleanupStatus === 'partial',
+          cleanupStatus: cleanRes.cleanupStatus,
+          statusMessage: cleanRes.statusMessage,
+          cleanedMarkCount: cleanRes.cleanedMarkCount,
+          preservedRiskMarkCount: cleanRes.preservedRiskMarkCount,
+          overlapWarning: cleanRes.overlapWarning,
+          overlapMessage: cleanRes.overlapMessage,
+          topicName: cleanRes.detectedTopicName || capturedPreview.topicName,
+          subtopicName: cleanRes.detectedSubtopicName || capturedPreview.subtopicName,
         });
-        if (aiRes.overlapWarning && aiRes.overlapMessage) {
-          setErrorMsg(aiRes.overlapMessage);
+        if (cleanRes.overlapWarning && cleanRes.overlapMessage) {
+          setErrorMsg(cleanRes.overlapMessage);
         }
       } else {
         setErrorMsg(
-          aiRes.errorMessage ||
+          cleanRes.errorMessage ||
             'Yapay zekâ yanıt veremedi. Telefonunuzdaki Gemini uygulamasında temizlediğiniz görseli kopyalayıp yeşil "📋 Panodan Yapıştır" butonuna basarak anında aktarabilirsiniz.'
         );
       }
@@ -647,7 +646,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     setErrorMsg(null);
     try {
       const src = item.rawOriginalDataUrl || item.dataUrl;
-      const res = await processQuestionPhotoWithAi(src, item.subjectId);
+      const res = await cleanCroppedQuestionImage(src, item.subjectId);
       if (res.success && res.cleanDataUrl) {
         setStagedItems((prev) =>
           prev.map((p) =>
@@ -656,7 +655,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                   ...p,
                   dataUrl: res.cleanDataUrl,
                   cleanDataUrl: res.cleanDataUrl,
-                  rawOriginalDataUrl: res.rawDataUrl || p.rawOriginalDataUrl || p.dataUrl,
+                  rawOriginalDataUrl: p.rawOriginalDataUrl || src,
                   isCleaned: res.cleanupStatus === 'success' || res.cleanupStatus === 'partial',
                   cleanupStatus: res.cleanupStatus,
                   statusMessage: res.statusMessage,
@@ -664,7 +663,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                   preservedRiskMarkCount: res.preservedRiskMarkCount,
                   overlapWarning: res.overlapWarning,
                   overlapMessage: res.overlapMessage,
-                  subjectId: res.subjectId || p.subjectId,
                   topicId: res.topicId || p.topicId,
                   subtopicName: res.subtopicName || p.subtopicName,
                 }
@@ -1241,19 +1239,23 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                           alt="Kırpılan Soru"
                           className="max-h-[44vh] max-w-full w-auto object-contain rounded-lg"
                         />
-                        {capturedPreview.cleanupStatus === 'partial' ? (
-                          <span className="absolute top-2 right-2 bg-amber-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
-                            ⚠️ KISMİ TEMİZ
+                        {capturedPreview.cleanupStatus === 'partial' || capturedPreview.overlapWarning ? (
+                          <span className="absolute top-2 right-2 bg-amber-600/95 text-white text-[10px] font-black px-2.5 py-1 rounded-md shadow-md flex items-center gap-1.5 border border-amber-400/40">
+                            ⚠️ KISMİ TEMİZ — KONTROL GEREKLİ
                           </span>
                         ) : capturedPreview.cleanupStatus === 'manual_needed' ? (
-                          <span className="absolute top-2 right-2 bg-orange-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
-                            🔍 MANUEL KONTROL
+                          <span className="absolute top-2 right-2 bg-orange-600/95 text-white text-[10px] font-black px-2.5 py-1 rounded-md shadow-md flex items-center gap-1.5 border border-orange-400/40">
+                            🔍 MANUEL KONTROL GEREKLİ
                           </span>
-                        ) : (capturedPreview.cleanupStatus === 'success' || (capturedPreview.isCleaned && !capturedPreview.overlapWarning)) ? (
-                          <span className="absolute top-2 right-2 bg-emerald-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
-                            <Sparkles className="w-3 h-3" /> TEMİZLENDİ
+                        ) : (capturedPreview.cleanupStatus === 'success' && !capturedPreview.overlapWarning && capturedPreview.isCleaned) ? (
+                          <span className="absolute top-2 right-2 bg-emerald-600/95 text-white text-[10px] font-black px-2.5 py-1 rounded-md shadow-md flex items-center gap-1.5 border border-emerald-400/40">
+                            <Sparkles className="w-3.5 h-3.5" /> ✨ TEMİZLENDİ
                           </span>
-                        ) : null}
+                        ) : (
+                          <span className="absolute top-2 right-2 bg-slate-800/90 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-md shadow-md flex items-center gap-1 border border-slate-600/60">
+                            📷 ORİJİNAL
+                          </span>
+                        )}
 
                         {(capturedPreview.overlapWarning || capturedPreview.cleanupStatus === 'partial') && (
                           <div className="mt-2 bg-amber-950/80 border border-amber-500/50 text-amber-200 text-[11px] px-3 py-1.5 rounded-xl max-w-md text-center">
@@ -1603,7 +1605,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               alt={`Soru ${idx + 1}`}
                               className="w-full h-24 object-contain bg-white rounded-lg border border-slate-200"
                             />
-                            {item.cleanupStatus === 'partial' ? (
+                            {item.cleanupStatus === 'partial' || item.overlapWarning ? (
                               <span className="absolute top-1 right-1 bg-amber-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
                                 ⚠️ KISMİ
                               </span>
@@ -1611,11 +1613,15 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               <span className="absolute top-1 right-1 bg-orange-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
                                 🔍 MANUEL
                               </span>
-                            ) : (item.cleanupStatus === 'success' || (item.isCleaned && !item.overlapWarning)) ? (
+                            ) : (item.cleanupStatus === 'success' && !item.overlapWarning && item.isCleaned) ? (
                               <span className="absolute top-1 right-1 bg-emerald-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
                                 <Sparkles className="w-2.5 h-2.5" /> TEMİZ
                               </span>
-                            ) : null}
+                            ) : (
+                              <span className="absolute top-1 right-1 bg-slate-700/80 text-slate-200 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                                📷 ORİJİNAL
+                              </span>
+                            )}
                           </div>
                           {(item.overlapWarning || item.cleanupStatus === 'partial') && (
                             <div className="mt-1 text-[9px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-center leading-tight">

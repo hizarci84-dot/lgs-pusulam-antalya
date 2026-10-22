@@ -344,6 +344,7 @@ export interface InpaintResult {
   modifiedPixelCount: number;
   cleanedBoxesCount: number;
   preservedHighRiskBoxesCount: number;
+  initialStrokeCount?: number;
 }
 
 export interface InpaintQuestionDataUrlResult {
@@ -358,10 +359,13 @@ export interface InpaintQuestionDataUrlResult {
 }
 
 /**
- * Mask-controlled localized inpainting with 3-tier region handling:
- * 1. Safe regions (margin calculations, scratchpad notes): cleaned automatically.
+ * Mask-controlled localized inpainting with adaptive paper texture synthesis and 3-tier region handling:
+ * 1. Safe regions (margin calculations, scratchpad notes, blank area scribbles):
+ *    All strokes darker than local paper are removed without altering unmasked pixels.
  * 2. Recoverable overlap regions (choice circles, underlines, cross-out lines):
- *    pencil strokes are inpainted while protecting intense black printed typography, digits, and fraction bars!
+ *    - Choice circles: inpaint the outer ring, preserving the centered printed option letter (A, B, C, D).
+ *    - Underlines: inpaint below the text baseline, preserving the printed text above.
+ *    - Crossing lines: inpaint pencil/pen strokes while protecting deep-black printed ink.
  * 3. High-risk regions: heavily obscured printed math that cannot be reconstructed reliably is preserved.
  *
  * Pixels outside approved boxes remain 100% UNCHANGED relative to the oriented crop.
@@ -377,14 +381,48 @@ export function inpaintHandwritingRegions(
   } = {}
 ): InpaintResult {
   if (!boxes || boxes.length === 0) {
-    return { modifiedPixelCount: 0, cleanedBoxesCount: 0, preservedHighRiskBoxesCount: 0 };
+    return { modifiedPixelCount: 0, cleanedBoxesCount: 0, preservedHighRiskBoxesCount: 0, initialStrokeCount: 0 };
   }
   const protectColored = options.protectColoredArtwork !== false;
   const sampleRadius = Math.max(3, options.paperSamplingRadius || 6);
 
+  // 1. Establish a robust image-wide baseline paper color (from margins/corners)
+  let gRSum = 0;
+  let gGSum = 0;
+  let gBSum = 0;
+  let gCount = 0;
+  const sampleStep = Math.max(2, Math.floor(Math.min(width, height) / 30));
+
+  for (let y = 4; y < height - 4; y += sampleStep) {
+    for (let x = 4; x < width - 4; x += sampleStep) {
+      // Prioritize borders/margins
+      const isMargin = x < width * 0.15 || x > width * 0.85 || y < height * 0.15 || y > height * 0.85;
+      if (!isMargin) continue;
+
+      const idx = (y * width + x) * 4;
+      const r = pixels[idx];
+      const g = pixels[idx + 1];
+      const b = pixels[idx + 2];
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+      if (chroma < 26 && lum > 70) {
+        gRSum += r;
+        gGSum += g;
+        gBSum += b;
+        gCount++;
+      }
+    }
+  }
+
+  const globalPaperR = gCount > 0 ? Math.round(gRSum / gCount) : 240;
+  const globalPaperG = gCount > 0 ? Math.round(gGSum / gCount) : 238;
+  const globalPaperB = gCount > 0 ? Math.round(gBSum / gCount) : 235;
+  const globalPaperLum = 0.299 * globalPaperR + 0.587 * globalPaperG + 0.114 * globalPaperB;
+
   let totalModified = 0;
   let cleanedBoxes = 0;
   let preservedHighRisk = 0;
+  let totalInitialStrokes = 0;
 
   for (const rawBox of boxes) {
     const boxType: 'safe' | 'recoverable' | 'high_risk' =
@@ -407,52 +445,77 @@ export function inpaintHandwritingRegions(
     const x1 = Math.max(x0 + 1, Math.min(width, Math.round((xmaxNorm / 1000) * width)));
     const y1 = Math.max(y0 + 1, Math.min(height, Math.round((ymaxNorm / 1000) * height)));
 
-    // 1. Estimate local paper color around the bounding box perimeter
-    let paperRSum = 0;
-    let paperGSum = 0;
-    let paperBSum = 0;
-    let paperCount = 0;
+    const boxW = x1 - x0;
+    const boxH = y1 - y0;
+    if (boxW <= 0 || boxH <= 0) continue;
 
-    const sampleBorder = (bx: number, by: number) => {
+    const desc = (
+      (!Array.isArray(rawBox) && rawBox.description) ||
+      (rawBox as any)?.description ||
+      ''
+    ).toLowerCase();
+
+    const isUnderline =
+      boxType === 'recoverable' &&
+      (desc.includes('alt') || desc.includes('cizgi') || desc.includes('çizgi') || desc.includes('underline'));
+
+    const isChoiceMarkOrCircle =
+      boxType === 'recoverable' &&
+      (desc.includes('daire') ||
+        desc.includes('cember') ||
+        desc.includes('çember') ||
+        desc.includes('halka') ||
+        desc.includes('şık') ||
+        desc.includes('sik') ||
+        desc.includes('circle'));
+
+    // 2. Estimate adaptive local paper color around the bounding box perimeter
+    const borderSamples: Array<{ r: number; g: number; b: number; lum: number }> = [];
+
+    const sampleBorderPoint = (bx: number, by: number) => {
       if (bx >= 0 && bx < width && by >= 0 && by < height) {
         const idx = (by * width + bx) * 4;
         const r = pixels[idx];
         const g = pixels[idx + 1];
         const b = pixels[idx + 2];
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const maxC = Math.max(r, g, b);
-        const minC = Math.min(r, g, b);
-        if (lum > 135 && maxC - minC < 30) {
-          paperRSum += r;
-          paperGSum += g;
-          paperBSum += b;
-          paperCount++;
+        const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+        if (chroma < 28 && lum > 60) {
+          borderSamples.push({ r, g, b, lum });
         }
       }
     };
 
+    // Sample top & bottom borders (3px outside box)
     for (let bx = x0; bx < x1; bx += 2) {
-      sampleBorder(bx, Math.max(0, y0 - 2));
-      sampleBorder(bx, Math.min(height - 1, y1 + 2));
+      sampleBorderPoint(bx, Math.max(0, y0 - 3));
+      sampleBorderPoint(bx, Math.min(height - 1, y1 + 3));
     }
+    // Sample left & right borders (3px outside box)
     for (let by = y0; by < y1; by += 2) {
-      sampleBorder(Math.max(0, x0 - 2), by);
-      sampleBorder(Math.min(width - 1, x1 + 2), by);
+      sampleBorderPoint(Math.max(0, x0 - 3), by);
+      sampleBorderPoint(Math.min(width - 1, x1 + 3), by);
     }
 
-    const defaultPaperR = paperCount > 0 ? Math.round(paperRSum / paperCount) : 255;
-    const defaultPaperG = paperCount > 0 ? Math.round(paperGSum / paperCount) : 255;
-    const defaultPaperB = paperCount > 0 ? Math.round(paperBSum / paperCount) : 255;
-    const paperLum = 0.299 * defaultPaperR + 0.587 * defaultPaperG + 0.114 * defaultPaperB;
+    let defaultPaperR = globalPaperR;
+    let defaultPaperG = globalPaperG;
+    let defaultPaperB = globalPaperB;
+    let paperLum = globalPaperLum;
 
-    const pencilMaxLum = Math.max(160, paperLum - 12);
-    // In recoverable overlap regions (circles around choices A, B, C, D or underlines),
-    // protect intense black printed typography, digits, minus signs, and fraction bars!
-    const printProtectLum = boxType === 'safe' ? 30 : Math.min(68, paperLum - 110);
+    if (borderSamples.length >= 6) {
+      borderSamples.sort((a, b) => a.lum - b.lum);
+      // Pick 75th percentile to represent clean background paper without catching edge ink
+      const p75Idx = Math.floor(borderSamples.length * 0.75);
+      const chosen = borderSamples[p75Idx];
+      defaultPaperR = chosen.r;
+      defaultPaperG = chosen.g;
+      defaultPaperB = chosen.b;
+      paperLum = chosen.lum;
+    }
 
-    // 2. Scan box and identify pencil / scribble pixels
-    const boxW = x1 - x0;
-    const boxH = y1 - y0;
+    const pencilMaxLum = Math.max(120, paperLum * 0.92);
+
+    // 3. Scan box and identify pencil / scribble pixels
     const isScribble = new Uint8Array(boxW * boxH);
     let boxScribbleCount = 0;
 
@@ -468,21 +531,57 @@ export function inpaintHandwritingRegions(
         const chroma = maxC - minC;
 
         // Protect colored artwork (roses, vases, graphs, colored parcels)
-        if (protectColored && chroma > 18) {
+        if (protectColored && chroma > 28) {
           continue;
         }
 
-        // In recoverable overlap regions, protect intense black printed ink
-        if (lum < printProtectLum && chroma <= 18) {
-          continue;
+        let isMark = false;
+
+        if (boxType === 'safe') {
+          // Safe region: no printed question text is in this box (margins, white space calculations).
+          // Clean all graphite strokes and student pen marks!
+          if (lum < paperLum * 0.90 && chroma <= 28) {
+            isMark = true;
+          } else if (chroma > 22 && lum < paperLum * 0.95) {
+            isMark = true; // student colored pen
+          }
+        } else if (isUnderline) {
+          // Underlines sit below the line of text. Target only the lower 42% of the text bounding box.
+          const underlineYThreshold = y0 + Math.round(boxH * 0.58);
+          if (by >= underlineYThreshold) {
+            if (lum < paperLum * 0.92 && chroma <= 28) {
+              isMark = true;
+            } else if (chroma > 22 && lum < paperLum * 0.95) {
+              isMark = true;
+            }
+          }
+        } else if (isChoiceMarkOrCircle) {
+          // Choice circle: student draws a circle loop around the choice letter (A, B, C, D).
+          // Protect the central letter by targeting only the outer ring of the bounding box!
+          const topBand = y0 + Math.round(boxH * 0.22);
+          const botBand = y1 - Math.round(boxH * 0.22);
+          const leftBand = x0 + Math.round(boxW * 0.20);
+          const rightBand = x1 - Math.round(boxW * 0.20);
+          const isOuterRing = by < topBand || by > botBand || bx < leftBand || bx > rightBand;
+          if (isOuterRing) {
+            if (lum < paperLum * 0.92 && chroma <= 28) {
+              isMark = true;
+            } else if (chroma > 22 && lum < paperLum * 0.95) {
+              isMark = true;
+            }
+          }
+        } else {
+          // General recoverable region (diagonal scribbles crossing question or whitespace):
+          // Protect intense black printed typography (lum < 52 or lum < paperLum * 0.38)
+          const printProtectLum = Math.min(52, paperLum * 0.38);
+          if (lum >= printProtectLum && lum <= pencilMaxLum && chroma <= 28) {
+            isMark = true;
+          } else if (chroma > 25 && lum <= pencilMaxLum && lum > 35) {
+            isMark = true; // student colored pen
+          }
         }
 
-        // Graphite pencil marks have lower luminance than surrounding paper, with neutral chroma
-        // Student blue/red pen has high chroma with low/medium lum
-        const isGraphitePencil = lum >= printProtectLum && lum <= pencilMaxLum && chroma <= 22;
-        const isColoredPen = chroma > 28 && lum <= pencilMaxLum && lum > 35;
-
-        if (isGraphitePencil || isColoredPen) {
+        if (isMark) {
           isScribble[(by - y0) * boxW + (bx - x0)] = 1;
           boxScribbleCount++;
         }
@@ -491,9 +590,12 @@ export function inpaintHandwritingRegions(
 
     if (boxScribbleCount > 0) {
       cleanedBoxes++;
+      totalInitialStrokes += boxScribbleCount;
     }
 
-    // 3. Inpaint scribble pixels using local paper texture synthesis
+    // 4. Inpaint scribble pixels using adaptive local paper texture synthesis
+    const minCleanPaperLum = paperLum * 0.85;
+
     for (let by = y0; by < y1; by++) {
       for (let bx = x0; bx < x1; bx++) {
         const localIdx = (by - y0) * boxW + (bx - x0);
@@ -523,7 +625,8 @@ export function inpaintHandwritingRegions(
             const nLum = 0.299 * nr + 0.587 * ng + 0.114 * nb;
             const nChroma = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
 
-            if (nLum >= 160 && nChroma < 25) {
+            // Adaptive clean paper check: must be at least 85% of regional paper luminance
+            if (nLum >= minCleanPaperLum && nChroma < 25) {
               const dist = Math.sqrt(dx * dx + dy * dy);
               const w = 1 / (1 + dist);
               localRSum += nr * w;
@@ -540,9 +643,12 @@ export function inpaintHandwritingRegions(
           pixels[outIdx + 1] = Math.round(localGSum / localWeight);
           pixels[outIdx + 2] = Math.round(localBSum / localWeight);
         } else {
-          pixels[outIdx] = defaultPaperR;
-          pixels[outIdx + 1] = defaultPaperG;
-          pixels[outIdx + 2] = defaultPaperB;
+          // Subtle natural paper grain variation
+          const jitter = (Math.sin(bx * 12.9898 + by * 78.233) * 43758.5453) % 1;
+          const noise = Math.round((jitter - 0.5) * 2);
+          pixels[outIdx] = Math.max(0, Math.min(255, defaultPaperR + noise));
+          pixels[outIdx + 1] = Math.max(0, Math.min(255, defaultPaperG + noise));
+          pixels[outIdx + 2] = Math.max(0, Math.min(255, defaultPaperB + noise));
         }
         pixels[outIdx + 3] = 255;
         totalModified++;
@@ -554,6 +660,7 @@ export function inpaintHandwritingRegions(
     modifiedPixelCount: totalModified,
     cleanedBoxesCount: cleanedBoxes,
     preservedHighRiskBoxesCount: preservedHighRisk,
+    initialStrokeCount: totalInitialStrokes,
   };
 }
 
@@ -725,25 +832,40 @@ export function inpaintQuestionDataUrl(
         ctx.putImageData(imgData, 0, 0);
         const cleanDataUrl = canvas.toDataURL('image/jpeg', 0.92);
 
-        let cleanupStatus: CleanupStatus = 'success';
-        let statusMessage = '✨ Temizleme Başarılı: Karalamalar temizlendi.';
+        const hasOverlapRisk = Boolean(options.overlapWarning || inpaintResult.preservedHighRiskBoxesCount > 0);
+        let cleanupStatus: CleanupStatus = 'unchanged';
+        let statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
 
-        if (inpaintResult.modifiedPixelCount > 0 && inpaintResult.preservedHighRiskBoxesCount > 0) {
+        if (inpaintResult.modifiedPixelCount === 0) {
+          if (inpaintResult.preservedHighRiskBoxesCount > 0) {
+            cleanupStatus = 'manual_needed';
+            statusMessage =
+              '🔍 Manuel Kontrol Gerekli: Karalamalar basılı formül veya şekille yoğun çakıştığı için otomatik silinmedi. Daksil aracıyla elle temizleyebilirsiniz.';
+          } else {
+            cleanupStatus = 'unchanged';
+            statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
+          }
+        } else if (hasOverlapRisk) {
+          // Strictly 'partial' whenever an overlap warning or high-risk region is present. Never claim 'success'!
           cleanupStatus = 'partial';
           statusMessage =
             options.overlapMessage ||
-            '⚠️ Kısmi Temizleme: Güvenli karalamalar temizlendi. Basılı formül/yazı ile yoğun çakışan alan(lar) soruyu bozmamak için korundu.';
-        } else if (inpaintResult.modifiedPixelCount > 0) {
+            '⚠️ Kısmi Temizleme: Güvenli karalamalar temizlendi. Basılı formül veya yazı üzerindeki alanlar soruyu bozmamak için korundu. Kalan kısımları Daksil ile silebilirsiniz.';
+        } else {
           cleanupStatus = 'success';
           statusMessage = '✨ Temizleme Başarılı: Tüm kurşun kalem karalamaları ve işaretler temizlendi.';
-        } else if (inpaintResult.preservedHighRiskBoxesCount > 0) {
-          cleanupStatus = 'manual_needed';
-          statusMessage =
-            '🔍 Manuel Kontrol Gerekli: Karalamalar basılı formül veya şekille yoğun çakıştığı için otomatik silinmedi. Daksil aracıyla elle temizleyebilirsiniz.';
-        } else {
-          cleanupStatus = 'unchanged';
-          statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
         }
+
+        console.log('[AI Clean Diagnostic]', {
+          dimensions: `${width}x${height}`,
+          boxesProvided: boxes.length,
+          cleanedBoxes: inpaintResult.cleanedBoxesCount,
+          preservedHighRisk: inpaintResult.preservedHighRiskBoxesCount,
+          initialStrokePixels: inpaintResult.initialStrokeCount || 0,
+          modifiedPixels: inpaintResult.modifiedPixelCount,
+          overlapWarning: Boolean(options.overlapWarning),
+          finalStatus: cleanupStatus,
+        });
 
         resolve({
           success: true,

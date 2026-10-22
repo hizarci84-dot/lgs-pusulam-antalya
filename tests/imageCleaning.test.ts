@@ -332,4 +332,132 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     expect(pixels[highRiskFormulaIdx + 1]).toBe(25);
     expect(pixels[highRiskFormulaIdx + 2]).toBe(25);
   });
+
+  it('10. Düşük ışıklı (loş/oda aydınlatması ~138 lum) fotoğraflarda adaptif kağıt örneklemesi ile karalamaları pürüzsüz temizlemelidir', async () => {
+    const { inpaintHandwritingRegions } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+
+    // Indoor lighting: paper is around lum 138 (R=140, G=138, B=135)
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 140;
+      pixels[i + 1] = 138;
+      pixels[i + 2] = 135;
+      pixels[i + 3] = 255;
+    }
+
+    // Diagonal pencil mark inside [400, 400, 700, 700] -> at (55, 55): graphite lum 85 (R=85, G=85, B=85)
+    const pencilIdx = (55 * width + 55) * 4;
+    pixels[pencilIdx] = 85;
+    pixels[pencilIdx + 1] = 85;
+    pixels[pencilIdx + 2] = 85;
+
+    const result = inpaintHandwritingRegions(pixels, width, height, [
+      { ymin: 400, xmin: 400, ymax: 700, xmax: 700, type: 'safe', description: 'Boşluktaki çapraz karalama' },
+    ]);
+
+    expect(result.modifiedPixelCount).toBeGreaterThan(0);
+    // Inpainted pixel must blend adaptively to local paper (around 130-145), NOT jump to pure white 255 or flat 0!
+    expect(pixels[pencilIdx]).toBeGreaterThanOrEqual(125);
+    expect(pixels[pencilIdx]).toBeLessThanOrEqual(150);
+  });
+
+  it('11. Şık daireleme işaretinde: Çevreleyen kurşun kalem halkasını silmeli, ortadaki basılı A/B/C/D harfini %100 korumalıdır', async () => {
+    const { inpaintHandwritingRegions } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+
+    // White paper (R=245, G=245, B=245)
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 245;
+      pixels[i + 1] = 245;
+      pixels[i + 2] = 245;
+      pixels[i + 3] = 255;
+    }
+
+    // Box is [200, 200, 400, 400] -> x: 20..40, y: 20..40
+    // Centered printed choice letter 'A' at (30, 30): dark ink (R=25, G=25, B=25)
+    const letterCenterIdx = (30 * width + 30) * 4;
+    pixels[letterCenterIdx] = 25;
+    pixels[letterCenterIdx + 1] = 25;
+    pixels[letterCenterIdx + 2] = 25;
+
+    // Outer circle loop at top perimeter (22, 30): pencil stroke (R=130, G=130, B=130)
+    const circleLoopIdx = (22 * width + 30) * 4;
+    pixels[circleLoopIdx] = 130;
+    pixels[circleLoopIdx + 1] = 130;
+    pixels[circleLoopIdx + 2] = 130;
+
+    const result = inpaintHandwritingRegions(pixels, width, height, [
+      {
+        ymin: 200,
+        xmin: 200,
+        ymax: 400,
+        xmax: 400,
+        type: 'recoverable',
+        description: 'A şıkkı etrafındaki kurşun kalem dairesi',
+      },
+    ]);
+
+    expect(result.modifiedPixelCount).toBeGreaterThan(0);
+    // Center choice letter must be 100% PRESERVED
+    expect(pixels[letterCenterIdx]).toBe(25);
+    expect(pixels[letterCenterIdx + 1]).toBe(25);
+    expect(pixels[letterCenterIdx + 2]).toBe(25);
+
+    // Outer circle loop must be inpainted to paper texture (>= 230)
+    expect(pixels[circleLoopIdx]).toBeGreaterThanOrEqual(230);
+  });
+
+  it('12. Alt çizgi işaretinde: Metnin altındaki kurşun kalem çizgisini silmeli, üstteki soru metnini %100 korumalıdır', async () => {
+    const { inpaintHandwritingRegions } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 245;
+      pixels[i + 1] = 245;
+      pixels[i + 2] = 245;
+      pixels[i + 3] = 255;
+    }
+
+    // Box is [100, 100, 300, 500] -> x: 10..50, y: 10..30
+    // Printed text line in upper portion (y=15, x=30): dark ink (R=20, G=20, B=20)
+    const textIdx = (15 * width + 30) * 4;
+    pixels[textIdx] = 20;
+    pixels[textIdx + 1] = 20;
+    pixels[textIdx + 2] = 20;
+
+    // Student underline in lower portion (y=26, x=30): pencil stroke (R=120, G=120, B=120)
+    const underlineIdx = (26 * width + 30) * 4;
+    pixels[underlineIdx] = 120;
+    pixels[underlineIdx + 1] = 120;
+    pixels[underlineIdx + 2] = 120;
+
+    const result = inpaintHandwritingRegions(pixels, width, height, [
+      {
+        ymin: 100,
+        xmin: 100,
+        ymax: 300,
+        xmax: 500,
+        type: 'recoverable',
+        description: 'Soru metninin altındaki çizgi',
+      },
+    ]);
+
+    expect(result.modifiedPixelCount).toBeGreaterThan(0);
+    // Upper text line must be 100% PRESERVED
+    expect(pixels[textIdx]).toBe(20);
+    expect(pixels[textIdx + 1]).toBe(20);
+    expect(pixels[textIdx + 2]).toBe(20);
+
+    // Lower underline must be inpainted to paper texture
+    expect(pixels[underlineIdx]).toBeGreaterThanOrEqual(230);
+  });
 });
