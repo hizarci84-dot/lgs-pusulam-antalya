@@ -5,7 +5,7 @@ const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
 const STORAGE_KEY_MODEL = 'lgs_gemini_model';
 function getIntegratedDefaultApiKey(): string {
   try {
-    return atob('QVEuQWI4Uk42SnQwSWNpUzJjRE5fNGlLdkxNNUtjdzZoemptTHdGTE5WUWdocnRjUVZ4LVE=');
+    return atob('QVEuQWI4Uk42TFk5UHhraVkxOEY2UV9aRmdsclNlcF82cGs5aDR6ZlRFZlplaVlObmxvT2c=');
   } catch {
     return '';
   }
@@ -24,6 +24,12 @@ export function getStoredGeminiApiKey(): string {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_API_KEY);
     if (saved !== null && saved !== undefined && saved.trim().length > 0) {
+      // Auto-migrate if old deprecated key was saved in user browser
+      if (saved.includes('Ab8RN6Jt0Ici')) {
+        const newKey = getIntegratedDefaultApiKey();
+        saveStoredGeminiApiKey(newKey);
+        return newKey;
+      }
       return saved.trim();
     }
     return getIntegratedDefaultApiKey();
