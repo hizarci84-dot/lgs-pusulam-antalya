@@ -89,6 +89,7 @@ export async function testGeminiApiKey(
         generationConfig: {
           temperature: 0.1,
           maxOutputTokens: 20,
+          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     });
@@ -189,50 +190,66 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
     const mimeMatch = params.dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const modelsToTry = [
+      model,
+      ...CANDIDATE_MODELS.filter((m) => m !== model),
+    ];
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: systemPrompt },
+    let parsed: any = null;
+    let lastError = '';
+
+    for (const currentModel of modelsToTry) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
               {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: cleanBase64,
-                },
+                parts: [
+                  { text: systemPrompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-        },
-      }),
-    });
+            generationConfig: {
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return {
-        success: false,
-        errorMessage: `Gemini API hatası (${response.status}): ${errText.slice(0, 200)}`,
-      };
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `${currentModel} (${response.status}): ${errText.slice(0, 150)}`;
+          console.warn(`detectQuestionTopicWithAi: ${currentModel} returned ${response.status}, trying fallback model...`);
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJsonText) {
+          parsed = JSON.parse(rawJsonText);
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
     }
 
-    const data = await response.json();
-    const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawJsonText) {
+    if (!parsed) {
       return {
         success: false,
-        errorMessage: 'Yapay zekâdan geçerli bir yanıt alınamadı.',
+        errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
       };
     }
-
-    const parsed = JSON.parse(rawJsonText);
     if (!parsed.isReadable) {
       return {
         success: false,
@@ -349,50 +366,66 @@ Eğer soru görseli okunamıyorsa:
     const mimeMatch = params.dataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const modelsToTry = [
+      model,
+      ...CANDIDATE_MODELS.filter((m) => m !== model),
+    ];
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: systemPrompt },
+    let parsed: any = null;
+    let lastError = '';
+
+    for (const currentModel of modelsToTry) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
               {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: cleanBase64,
-                },
+                parts: [
+                  { text: systemPrompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-        },
-      }),
-    });
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType: 'application/json',
+              thinkingConfig: { thinkingBudget: 0 },
+            },
+          }),
+        });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return {
-        success: false,
-        errorMessage: `Gemini API hatası (${response.status}): ${errText.slice(0, 200)}`,
-      };
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `${currentModel} (${response.status}): ${errText.slice(0, 150)}`;
+          console.warn(`detectQuestionErrorReasonWithAi: ${currentModel} returned ${response.status}, trying fallback model...`);
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJsonText) {
+          parsed = JSON.parse(rawJsonText);
+          break;
+        }
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
     }
 
-    const data = await response.json();
-    const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawJsonText) {
+    if (!parsed) {
       return {
         success: false,
-        errorMessage: 'Yapay zekâdan geçerli bir yanıt alınamadı.',
+        errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
       };
     }
-
-    const parsed = JSON.parse(rawJsonText);
     if (!parsed.isReadable) {
       return {
         success: false,

@@ -1057,17 +1057,25 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   )}
                 </div>
 
-                <div className="bg-white/90 rounded-xl p-3 border border-purple-100 text-[11px] text-slate-700 leading-relaxed shadow-2xs">
-                  💡 <strong>Google AI Pro / Gemini Advanced</strong> aboneliğinizle veya{' '}
-                  <a
-                    href="https://aistudio.google.com/app/apikey"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-purple-700 underline font-bold"
-                  >
-                    Google AI Studio
-                  </a>{' '}
-                  üzerinden aldığınız <code className="bg-purple-100 px-1 py-0.5 rounded text-purple-900 font-mono">AIza...</code> ile başlayan API anahtarınızı buraya yapıştırın. Anahtarınız yalnızca sizin telefonunuzda güvenle saklanır.
+                <div className="bg-white/90 rounded-xl p-3.5 border border-purple-200 text-xs text-slate-700 leading-relaxed shadow-2xs space-y-2">
+                  <div className="font-bold text-purple-900 flex items-center gap-1.5 text-xs">
+                    <span>👑 Google AI Pro / Gemini Advanced Aboneleri İçin:</span>
+                  </div>
+                  <p>
+                    Gemini AI Pro aboneliğinizi doğrudan bağlamak için Google hesabınızla{' '}
+                    <a
+                      href="https://aistudio.google.com/app/apikey"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-purple-700 underline font-black hover:text-purple-900"
+                    >
+                      aistudio.google.com/app/apikey
+                    </a>{' '}
+                    sayfasına gidin ve <strong>"Create API key" (API Anahtarı Oluştur)</strong> butonuna tıklayın.
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Oluşturulan <code className="bg-purple-100 px-1 py-0.5 rounded text-purple-900 font-mono font-bold">AIza...</code> ile başlayan anahtarınızı aşağıdaki kutuya yapıştırıp kaydedin. Böylece kendi Pro aboneliğinizin kotasını kesintisiz kullanabilirsiniz.
+                  </p>
                 </div>
 
                 <div>
@@ -1101,8 +1109,10 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                     onChange={(e) => setGeminiModel(e.target.value)}
                     className="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white font-medium"
                   >
-                    <option value="gemini-flash-latest">Gemini Flash (Önerilen • Çok Hızlı ve Yüksek Doğruluk)</option>
-                    <option value="gemini-3.8-flash">Gemini 3.8 Flash (Ultra Hızlı)</option>
+                    <option value="gemini-3-flash-preview">Gemini 3 Flash (Önerilen • Çok Hızlı ve Kararlı)</option>
+                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                    <option value="gemini-pro-latest">Gemini Pro (Google AI Pro Abonelikleri İçin)</option>
                   </select>
                 </div>
 
