@@ -526,7 +526,7 @@ export function cropRotateAndCleanQuestion(params: {
 
         const rawCroppedDataUrl = uprightCanvas.toDataURL('image/jpeg', 0.90);
 
-        // 4. Create clean canvas
+        // 4. Create clean canvas with adaptive illumination & pencil removal
         const cleanCanvas = document.createElement('canvas');
         cleanCanvas.width = uprightCanvas.width;
         cleanCanvas.height = uprightCanvas.height;
@@ -540,57 +540,7 @@ export function cropRotateAndCleanQuestion(params: {
         cleanCtx.fillRect(0, 0, cleanCanvas.width, cleanCanvas.height);
         cleanCtx.drawImage(uprightCanvas, 0, 0);
 
-        // 5. Erase student calculation boxes in margins if provided
-        if (params.pencilMarkings && params.pencilMarkings.length > 0) {
-          const boxW = xmax - xmin || 1000;
-          const boxH = ymax - ymin || 1000;
-
-          cleanCtx.fillStyle = '#ffffff';
-          for (const mark of params.pencilMarkings) {
-            if (!mark.box_2d || mark.box_2d.length !== 4) continue;
-            const [mYmin, mXmin, mYmax, mXmax] = mark.box_2d;
-
-            let rx0 = ((mXmin - xmin) / boxW) * cropW;
-            let ry0 = ((mYmin - ymin) / boxH) * cropH;
-            let rx1 = ((mXmax - xmin) / boxW) * cropW;
-            let ry1 = ((mYmax - ymin) / boxH) * cropH;
-
-            let fx0 = rx0,
-              fy0 = ry0,
-              fx1 = rx1,
-              fy1 = ry1;
-            if (rot === 90) {
-              fx0 = cropH - ry1;
-              fy0 = rx0;
-              fx1 = cropH - ry0;
-              fy1 = rx1;
-            } else if (rot === 180) {
-              fx0 = cropW - rx1;
-              fy0 = cropH - ry1;
-              fx1 = cropW - rx0;
-              fy1 = cropH - ry0;
-            } else if (rot === 270) {
-              fx0 = ry0;
-              fy0 = cropW - rx1;
-              fx1 = ry1;
-              fy1 = cropW - rx0;
-            }
-
-            const bx0 = Math.max(0, Math.min(cleanCanvas.width, Math.min(fx0, fx1) - 4));
-            const by0 = Math.max(0, Math.min(cleanCanvas.height, Math.min(fy0, fy1) - 4));
-            const bw = Math.min(cleanCanvas.width - bx0, Math.abs(fx1 - fx0) + 8);
-            const bh = Math.min(cleanCanvas.height - by0, Math.abs(fy1 - fy0) + 8);
-
-            const type = mark.type || 'calculation';
-            if (type === 'calculation' || type === 'margin_note') {
-              cleanCtx.fillRect(bx0, by0, bw, bh);
-            } else if (type === 'underline') {
-              cleanCtx.fillRect(bx0, by0 + bh * 0.5, bw, bh * 0.5);
-            }
-          }
-        }
-
-        // 6. Apply pixel illumination & pencil removal filter
+        // 5. Apply pixel illumination & paper whitening filter
         const imgData = cleanCtx.getImageData(0, 0, cleanCanvas.width, cleanCanvas.height);
         cleanImageDataPixels(imgData.data, cleanCanvas.width, cleanCanvas.height, {
           mode: 'balanced',
@@ -607,6 +557,183 @@ export function cropRotateAndCleanQuestion(params: {
     };
     img.src = params.dataUrl;
   });
+}
+
+/**
+ * Extracts the authentic illustration/diagram snippet from the question image
+ * and applies background whitening so it blends seamlessly into the clean card.
+ */
+export function extractIllustrationSnippet(
+  dataUrl: string,
+  box: [number, number, number, number] // [ymin, xmin, ymax, xmax] 0..1000
+): Promise<string> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const W = img.naturalWidth || img.width;
+        const H = img.naturalHeight || img.height;
+        const [ymin, xmin, ymax, xmax] = box;
+
+        const x0 = Math.max(0, Math.round((xmin / 1000) * W));
+        const y0 = Math.max(0, Math.round((ymin / 1000) * H));
+        const w = Math.max(20, Math.min(W - x0, Math.round(((xmax - xmin) / 1000) * W)));
+        const h = Math.max(20, Math.min(H - y0, Math.round(((ymax - ymin) / 1000) * H)));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+
+        const imgData = ctx.getImageData(0, 0, w, h);
+        cleanImageDataPixels(imgData.data, w, h, { preserveIllustrations: true, cleanBorders: false });
+        ctx.putImageData(imgData, 0, 0);
+
+        resolve(canvas.toDataURL('image/jpeg', 0.92));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.src = dataUrl;
+  });
+}
+
+function escapeXml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Builds a pristine, publication-grade SVG question card that:
+ * 1. Contains 100% clean vector text (zero pencil scratches, zero circled answers, zero underlines).
+ * 2. Embeds the authentic real illustration/photo snippet directly, preserving real flowers, vases, and colors.
+ */
+export function buildHybridCleanSvg(params: {
+  questionNumber?: string;
+  headerText?: string;
+  stemText?: string;
+  choices?: string[];
+  illustrationDataUrl?: string | null;
+  illustrationHeight?: number;
+}): string {
+  const {
+    questionNumber = '1.',
+    headerText = '',
+    stemText = '',
+    choices = ['A', 'B', 'C', 'D'],
+    illustrationDataUrl = null,
+    illustrationHeight = 220,
+  } = params;
+
+  function wrapText(text: string, maxChars = 68): string[] {
+    if (!text) return [];
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+    for (const w of words) {
+      if ((currentLine + ' ' + w).trim().length > maxChars) {
+        if (currentLine) lines.push(currentLine.trim());
+        currentLine = w;
+      } else {
+        currentLine = (currentLine + ' ' + w).trim();
+      }
+    }
+    if (currentLine) lines.push(currentLine.trim());
+    return lines;
+  }
+
+  const headerLines = wrapText(headerText, 68);
+  const stemLines = wrapText(stemText, 68);
+
+  let currentY = 55;
+  const headerTspans = headerLines
+    .map((line, idx) => {
+      const y = currentY;
+      currentY += 28;
+      if (idx === 0) {
+        return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b"><tspan font-weight="bold" fill="#0f172a">${escapeXml(
+          questionNumber
+        )} </tspan>${escapeXml(line)}</text>`;
+      }
+      return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b">${escapeXml(
+        line
+      )}</text>`;
+    })
+    .join('\n  ');
+
+  let illBlock = '';
+  if (illustrationDataUrl) {
+    currentY += 15;
+    const illY = currentY;
+    illBlock = `
+  <!-- Authentic Real Illustration Embedded Directly -->
+  <g transform="translate(50, ${illY})">
+    <rect width="700" height="${illustrationHeight}" fill="#ffffff" />
+    <image href="${illustrationDataUrl}" x="10" y="10" width="680" height="${
+      illustrationHeight - 20
+    }" preserveAspectRatio="xMidYMid meet" />
+  </g>`;
+    currentY += illustrationHeight + 25;
+  } else {
+    currentY += 15;
+  }
+
+  const stemTspans = stemLines
+    .map((line, idx) => {
+      const isLast = idx === stemLines.length - 1;
+      const y = currentY;
+      currentY += 28;
+      return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" font-weight="${
+        isLast ? 'bold' : 'normal'
+      }" fill="${isLast ? '#0f172a' : '#1e293b'}">${escapeXml(line)}</text>`;
+    })
+    .join('\n  ');
+
+  currentY += 25;
+  const choiceY = currentY;
+  const choiceLetters = ['A', 'B', 'C', 'D'];
+  const choiceElements = (choices.length > 0 ? choices : ['A', 'B', 'C', 'D'])
+    .slice(0, 4)
+    .map((c, i) => {
+      const x = 50 + i * 180;
+      return `
+    <g transform="translate(${x}, ${choiceY})">
+      <rect width="165" height="46" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+      <text x="16" y="28" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">${
+        choiceLetters[i]
+      }) <tspan font-weight="normal" fill="#334155">${escapeXml(c)}</tspan></text>
+    </g>`;
+    })
+    .join('');
+
+  const totalHeight = choiceY + 75;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 ${totalHeight}" width="800" height="${totalHeight}" style="background-color:#ffffff;">
+  ${headerTspans}
+  ${illBlock}
+  ${stemTspans}
+  <g>
+    ${choiceElements}
+  </g>
+</svg>`;
 }
 
 /**

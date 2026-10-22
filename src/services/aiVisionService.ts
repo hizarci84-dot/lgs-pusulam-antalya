@@ -1,6 +1,10 @@
 import { getTopicsBySubject, SUBJECT_MAP } from '../data/curriculum';
 import { SubjectId } from '../types/models';
-import { cropRotateAndCleanQuestion } from './imageUtils';
+import {
+  buildHybridCleanSvg,
+  cropRotateAndCleanQuestion,
+  extractIllustrationSnippet,
+} from './imageUtils';
 
 const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
 const STORAGE_KEY_MODEL = 'lgs_gemini_model';
@@ -12,11 +16,13 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-3.8-flash';
+export const DEFAULT_MODEL = 'gemini-3.5-flash';
 
 export const CANDIDATE_MODELS = [
-  'gemini-3.8-flash',
   'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
   'gemini-3-flash-preview',
   'gemini-flash-latest',
 ];
@@ -643,31 +649,30 @@ export async function processQuestionPhotoWithAi(
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
     const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
-Kullanıcının gönderdiği bu soru fotoğrafını analiz et:
-
-1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] sınır koordinatlarını (0-1000 normalize ölçekte) belirle.
+Bu soru fotoğrafını incele:
+1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] koordinatları (0-1000 normalize ölçekte).
    - Soru numarası, soru kökü, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
    - Önceki/sonraki soruları, masa, halı, parmak ve kenar boşluklarını hariç tut.
-2. "rotation_needed": Sorunun düz (okunabilir) hale gelmesi için saat yönünde yapılması gereken dönme açısı (0, 90, 180 veya 270). Fotoğraf zaten düz ise 0 ver.
-3. "has_complex_illustrations": Soruda çiçek, vazo, deney düzeneği, fotoğraf, harita veya renkli çizim gibi görsel içerik var mı? (true / false)
-4. "pencil_markings": Öğrencinin soru üzerine kurşun kalemle yaptığı hesaplamalar, karalamalar, alt çizimler veya şık işaretlemelerinin kutuları:
-   [{"box_2d": [ymin, xmin, ymax, xmax], "type": "calculation" | "circle" | "underline" | "margin_note"}]
-5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
-6. "detectedTopicName": MEB müfredatındaki konu adı
-7. "detectedSubtopicName": MEB alt kazanım adı
-8. "confidence": Güven puanı (0-100)
+2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
+3. "illustration_box_2d": Sorudaki görselin (çiçekler, vazolar, şekil, grafik veya deney düzeneği) [ymin, xmin, ymax, xmax] koordinatları. Şekil yoksa null ver.
+4. "question_number": Soru numarası (örn: "2.")
+5. "header_text": Şeklin üstündeki soru metni (öğrencinin kurşun kalemle çizdiği alt çizgiler, karalamalar tamamen çıkarılmış temiz orijinal metin).
+6. "stem_text": Şeklin altındaki soru metni ve koyu renkli soru kökü.
+7. "choices": ["A şıkkı metni", "B şıkkı metni", "C şıkkı metni", "D şıkkı metni"] (şık daireleri ve öğrenci işaretlemeleri tamamen temizlenmiş).
+8. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+9. "detectedTopicName": MEB müfredatındaki konu adı
+10. "detectedSubtopicName": MEB alt kazanım adı
+11. "confidence": Güven puanı (0-100)
 
 Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 {
   "question_box_2d": [ymin, xmin, ymax, xmax],
   "rotation_needed": 0 | 90 | 180 | 270,
-  "has_complex_illustrations": boolean,
-  "pencil_markings": [
-    {
-      "box_2d": [ymin, xmin, ymax, xmax],
-      "type": "calculation" | "circle" | "underline" | "margin_note"
-    }
-  ],
+  "illustration_box_2d": [ymin, xmin, ymax, xmax] | null,
+  "question_number": string,
+  "header_text": string,
+  "stem_text": string,
+  "choices": [string, string, string, string],
   "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce",
   "detectedTopicName": string,
   "detectedSubtopicName": string,
@@ -737,31 +742,60 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       };
     }
 
-    // High-Fidelity Auto-Crop, Auto-Straighten & Faithful Pencil Cleaning
-    // Preserves 100% of the original illustrations, colors, shapes and text
-    let cleanDataUrl = photoDataUrl;
+    // 1. Crop & Straighten the original camera photo to upright question
     let croppedRawDataUrl = photoDataUrl;
+    let whitenedPhotoDataUrl = photoDataUrl;
 
     try {
       const faithfulResult = await cropRotateAndCleanQuestion({
         dataUrl: photoDataUrl,
         questionBox: parsed.question_box_2d,
         rotationNeeded: parsed.rotation_needed || 0,
-        pencilMarkings: parsed.pencil_markings || [],
         preserveIllustrations: true,
       });
-      cleanDataUrl = faithfulResult.cleanDataUrl;
+      whitenedPhotoDataUrl = faithfulResult.cleanDataUrl;
       croppedRawDataUrl = faithfulResult.rawCroppedDataUrl;
     } catch (cropCleanErr) {
       console.warn('cropRotateAndCleanQuestion error, falling back:', cropCleanErr);
       if (Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4) {
         try {
           croppedRawDataUrl = await cropImageDataUrlByBox(photoDataUrl, parsed.question_box_2d as [number, number, number, number]);
-          cleanDataUrl = croppedRawDataUrl;
+          whitenedPhotoDataUrl = croppedRawDataUrl;
         } catch {
           // ignore
         }
       }
+    }
+
+    // 2. Build Hybrid Pristine Question Card (Zero Scribbles + Authentic Original Illustration)
+    let cleanDataUrl = whitenedPhotoDataUrl;
+    let isSvgCleaned = false;
+
+    try {
+      let illustrationSnippetUrl: string | null = null;
+      if (Array.isArray(parsed.illustration_box_2d) && parsed.illustration_box_2d.length === 4) {
+        illustrationSnippetUrl = await extractIllustrationSnippet(
+          croppedRawDataUrl,
+          parsed.illustration_box_2d as [number, number, number, number]
+        );
+      }
+
+      const hybridSvg = buildHybridCleanSvg({
+        questionNumber: parsed.question_number || '1.',
+        headerText: parsed.header_text || '',
+        stemText: parsed.stem_text || '',
+        choices: Array.isArray(parsed.choices) && parsed.choices.length > 0 ? parsed.choices : ['A', 'B', 'C', 'D'],
+        illustrationDataUrl: illustrationSnippetUrl,
+        illustrationHeight: illustrationSnippetUrl ? 220 : 0,
+      });
+
+      const b64Svg = typeof window !== 'undefined'
+        ? window.btoa(unescape(encodeURIComponent(hybridSvg)))
+        : Buffer.from(hybridSvg).toString('base64');
+      cleanDataUrl = `data:image/svg+xml;base64,${b64Svg}`;
+      isSvgCleaned = true;
+    } catch (svgBuildErr) {
+      console.warn('buildHybridCleanSvg failed, falling back to whitened photo:', svgBuildErr);
     }
 
     // Subject resolution
@@ -805,7 +839,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
       subtopicName: finalSubtopicName,
       confidence: parsed.confidence || 95,
-      isSvgCleaned: false,
+      isSvgCleaned,
       isFaithfulCleaned: true,
     };
   } catch (err: any) {
