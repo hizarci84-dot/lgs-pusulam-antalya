@@ -23,9 +23,6 @@ export const CANDIDATE_MODELS = [
   'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
   'gemini-3.1-flash-lite',
-  'gemini-3.8-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
 ];
 
 export function getStoredGeminiApiKey(): string {
@@ -59,18 +56,14 @@ export function getStoredGeminiModel(): string {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
     if (
       saved &&
-      saved !== 'gemini-3-flash-preview' &&
-      !saved.includes('1.5') &&
-      !saved.includes('2.0') &&
-      !saved.includes('2.5')
+      (saved === 'gemini-3.5-flash-lite' ||
+        saved === 'gemini-flash-lite-latest' ||
+        saved === 'gemini-3.1-flash-lite')
     ) {
-      // Auto-migrate if the user previously had gemini-3.5-flash or gemini-3.6-flash which exhausted free tier quota
-      if (saved === 'gemini-3.5-flash' || saved === 'gemini-3.6-flash' || saved === 'gemini-flash-latest') {
-        saveStoredGeminiModel(DEFAULT_MODEL);
-        return DEFAULT_MODEL;
-      }
       return saved;
     }
+    // Auto-migrate old quota-exhausted models (gemini-3.5-flash, gemini-3.8-flash, etc.)
+    saveStoredGeminiModel(DEFAULT_MODEL);
     return DEFAULT_MODEL;
   } catch {
     return DEFAULT_MODEL;
@@ -83,6 +76,50 @@ export function saveStoredGeminiModel(model: string): void {
   } catch {
     // ignore
   }
+}
+
+/**
+ * Downscales an image DataURL before sending it over the network to Gemini Vision.
+ * Significantly cuts upload payload size (from 3MB+ to ~120KB) and slashes network latency.
+ */
+export function downscaleDataUrlForAi(dataUrl: string, maxDim = 1024): Promise<string> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined' || !dataUrl || !dataUrl.startsWith('data:image/')) {
+      resolve(dataUrl);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => resolve(dataUrl);
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (w <= maxDim && h <= maxDim) {
+          resolve(dataUrl);
+          return;
+        }
+        const scale = maxDim / Math.max(w, h);
+        const targetW = Math.max(10, Math.round(w * scale));
+        const targetH = Math.max(10, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/jpeg', 0.84));
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    img.src = dataUrl;
+  });
 }
 
 export async function testGeminiApiKey(
@@ -222,6 +259,7 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(18000),
           body: JSON.stringify({
             contents: [
               {
@@ -397,6 +435,7 @@ Eğer soru görseli okunamıyorsa:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(18000),
           body: JSON.stringify({
             contents: [
               {
@@ -664,8 +703,9 @@ export async function processQuestionPhotoWithAi(
   }
 
   try {
-    const cleanBase64 = photoDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
-    const mimeMatch = photoDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+    const aiInputDataUrl = await downscaleDataUrlForAi(photoDataUrl, 1024);
+    const cleanBase64 = aiInputDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    const mimeMatch = aiInputDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
     const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
@@ -713,6 +753,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         const response = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(18000),
           body: JSON.stringify({
             contents: [
               {

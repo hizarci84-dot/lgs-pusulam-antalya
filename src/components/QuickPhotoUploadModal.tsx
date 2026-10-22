@@ -133,7 +133,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const frameRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // AI Topic Detection State
+  // Animated Progressive AI Notice
+  useEffect(() => {
+    if (!isAiProcessing) return;
+    const steps = [
+      '📸 1/3: Görüntü optimize ediliyor ve soru sınırları taranıyor...',
+      '✨ 2/3: Kurşun kalem karalamaları ve hesaplamalar siliniyor...',
+      '🎨 3/3: Orijinal şekiller ve temiz şıklar hazırlanıyor...',
+    ];
+    let stepIndex = 0;
+    setAiProcessingNotice(steps[0]);
+    const interval = setInterval(() => {
+      stepIndex = (stepIndex + 1) % steps.length;
+      setAiProcessingNotice(steps[stepIndex]);
+    }, 2800);
+    return () => clearInterval(interval);
+  }, [isAiProcessing]);
   const [loadingAiTempId, setLoadingAiTempId] = useState<string | null>(null);
   const [aiDetectionResult, setAiDetectionResult] = useState<{
     [tempId: string]: { topicName: string; subtopicName: string; confidence: number };
