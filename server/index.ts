@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { analyzeQuestionImage, getAIStatus } from './aiHandler.js';
+import { analyzeQuestionImage, cleanQuestionImageServer, getAIStatus } from './aiHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +26,18 @@ app.post('/api/ai/analyze-question', async (req, res) => {
       success: false,
       providerConfigured: false,
       providerName: 'none',
+      errorMessage: err?.message || 'Sunucu hatası oluştu.',
+    });
+  }
+});
+
+app.post('/api/ai/clean-question', async (req, res) => {
+  try {
+    const result = await cleanQuestionImageServer(req.body);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
       errorMessage: err?.message || 'Sunucu hatası oluştu.',
     });
   }

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clipboard,
   Copy,
+  Crop,
   Eraser,
   ExternalLink,
   Image as ImageIcon,
@@ -38,6 +39,7 @@ import {
   saveStoredGeminiApiKey,
 } from '../services/aiVisionService';
 import { ImageDaksilModal } from './ImageDaksilModal';
+import { FreehandImageCropper } from './FreehandImageCropper';
 import {
   ErrorReasonCode,
   ExamRecord,
@@ -65,7 +67,10 @@ interface StagedQuestionItem {
   dataUrl: string;
   cleanDataUrl?: string;
   rawOriginalDataUrl?: string;
+  originalUploadedUrl?: string;
   isCleaned?: boolean;
+  overlapWarning?: boolean;
+  overlapMessage?: string;
   mimeType: string;
   width: number;
   height: number;
@@ -118,13 +123,21 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     dataUrl: string;
     cleanDataUrl?: string;
     rawOriginalDataUrl?: string;
+    originalUploadedUrl?: string;
     isCleaned?: boolean;
+    overlapWarning?: boolean;
+    overlapMessage?: string;
     width: number;
     height: number;
     subjectId?: SubjectId;
     topicId?: string;
     topicName?: string;
     subtopicName?: string;
+  } | null>(null);
+  const [croppingTarget, setCroppingTarget] = useState<{
+    type: 'preview' | 'staged';
+    tempId?: string;
+    imageUrl: string;
   } | null>(null);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [aiProcessingNotice, setAiProcessingNotice] = useState<string | null>(null);
@@ -509,6 +522,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       let detectedTopId = '';
       let detectedTopName = '';
       let detectedSubtop = '';
+      let overlapWarn = false;
+      let overlapMsg = '';
 
       // Run End-to-End AI Auto-Crop & Pencil Cleaner if key is configured
       if (autoAiDetect && getStoredGeminiApiKey()) {
@@ -519,6 +534,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             finalDataUrl = aiRes.cleanDataUrl;
             croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
             isCleaned = true;
+            overlapWarn = Boolean(aiRes.overlapWarning);
+            overlapMsg = aiRes.overlapMessage || '';
             if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
             if (aiRes.topicId) detectedTopId = aiRes.topicId;
             if (aiRes.topicName) detectedTopName = aiRes.topicName;
@@ -539,7 +556,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         dataUrl: finalDataUrl,
         cleanDataUrl: isCleaned ? finalDataUrl : undefined,
         rawOriginalDataUrl: croppedRawDataUrl,
+        originalUploadedUrl: rawDataUrl,
         isCleaned,
+        overlapWarning: overlapWarn,
+        overlapMessage: overlapMsg,
         width: canvas.width,
         height: canvas.height,
         subjectId: detectedSubj,
@@ -547,6 +567,9 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         topicName: detectedTopName,
         subtopicName: detectedSubtop,
       });
+      if (overlapWarn && overlapMsg) {
+        setErrorMsg(overlapMsg);
+      }
     } catch (err: any) {
       setErrorMsg('Fotoğraf kırpılırken hata oluştu: ' + (err?.message || ''));
     }
@@ -567,11 +590,16 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           cleanDataUrl: aiRes.cleanDataUrl,
           rawOriginalDataUrl: aiRes.rawDataUrl || capturedPreview.rawOriginalDataUrl || src,
           isCleaned: true,
+          overlapWarning: aiRes.overlapWarning,
+          overlapMessage: aiRes.overlapMessage,
           subjectId: aiRes.subjectId || capturedPreview.subjectId,
           topicId: aiRes.topicId || capturedPreview.topicId,
           topicName: aiRes.topicName || capturedPreview.topicName,
           subtopicName: aiRes.subtopicName || capturedPreview.subtopicName,
         });
+        if (aiRes.overlapWarning && aiRes.overlapMessage) {
+          setErrorMsg(aiRes.overlapMessage);
+        }
       } else {
         setErrorMsg(
           aiRes.errorMessage ||
@@ -605,6 +633,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                   cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: res.rawDataUrl || p.rawOriginalDataUrl || p.dataUrl,
                   isCleaned: true,
+                  overlapWarning: res.overlapWarning,
+                  overlapMessage: res.overlapMessage,
                   subjectId: res.subjectId || p.subjectId,
                   topicId: res.topicId || p.topicId,
                   subtopicName: res.subtopicName || p.subtopicName,
@@ -612,6 +642,9 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               : p
           )
         );
+        if (res.overlapWarning && res.overlapMessage) {
+          setErrorMsg(res.overlapMessage);
+        }
         if (res.topicName) {
           setAiDetectionResult((prev) => ({
             ...prev,
@@ -638,19 +671,19 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   const handleRotatePreview = async () => {
     if (!capturedPreview) return;
     try {
-      const nextRotatedDataUrl = await applyCropAndRotation(capturedPreview.dataUrl, null, 90);
-      const nextRawDataUrl = capturedPreview.rawOriginalDataUrl
+      const nextRaw = capturedPreview.rawOriginalDataUrl
         ? await applyCropAndRotation(capturedPreview.rawOriginalDataUrl, null, 90)
-        : nextRotatedDataUrl;
-      const nextCleanDataUrl = capturedPreview.cleanDataUrl
+        : await applyCropAndRotation(capturedPreview.dataUrl, null, 90);
+
+      const nextClean = capturedPreview.cleanDataUrl
         ? await applyCropAndRotation(capturedPreview.cleanDataUrl, null, 90)
         : undefined;
 
       setCapturedPreview({
         ...capturedPreview,
-        dataUrl: nextRotatedDataUrl,
-        rawOriginalDataUrl: nextRawDataUrl,
-        cleanDataUrl: nextCleanDataUrl,
+        dataUrl: capturedPreview.isCleaned && nextClean ? nextClean : nextRaw,
+        rawOriginalDataUrl: nextRaw,
+        cleanDataUrl: nextClean,
       });
     } catch (err) {
       console.warn('Preview rotate failed:', err);
@@ -659,14 +692,23 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
 
   const handleRotateStagedItem = async (item: StagedQuestionItem) => {
     try {
-      const nextDataUrl = await applyCropAndRotation(item.dataUrl, null, 90);
       const nextRaw = item.rawOriginalDataUrl
         ? await applyCropAndRotation(item.rawOriginalDataUrl, null, 90)
-        : nextDataUrl;
+        : await applyCropAndRotation(item.dataUrl, null, 90);
+
+      const nextClean = item.cleanDataUrl
+        ? await applyCropAndRotation(item.cleanDataUrl, null, 90)
+        : undefined;
+
       setStagedItems((prev) =>
         prev.map((p) =>
           p.tempId === item.tempId
-            ? { ...p, dataUrl: nextDataUrl, rawOriginalDataUrl: nextRaw }
+            ? {
+                ...p,
+                dataUrl: p.isCleaned && nextClean ? nextClean : nextRaw,
+                rawOriginalDataUrl: nextRaw,
+                cleanDataUrl: nextClean,
+              }
             : p
         )
       );
@@ -698,7 +740,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       dataUrl: capturedPreview.dataUrl,
       cleanDataUrl: capturedPreview.cleanDataUrl || (capturedPreview.isCleaned ? capturedPreview.dataUrl : undefined),
       rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
+      originalUploadedUrl: capturedPreview.originalUploadedUrl || capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
       isCleaned: Boolean(capturedPreview.isCleaned),
+      overlapWarning: capturedPreview.overlapWarning,
+      overlapMessage: capturedPreview.overlapMessage,
       mimeType: 'image/jpeg',
       width: capturedPreview.width,
       height: capturedPreview.height,
@@ -744,6 +789,9 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         let detectedTopName = '';
         let detectedSubtop = '';
 
+        let overlapWarn = false;
+        let overlapMsg = '';
+
         if (autoAiDetect && getStoredGeminiApiKey()) {
           try {
             const aiRes = await processQuestionPhotoWithAi(compressed.dataUrl, batchSubjectId);
@@ -751,24 +799,15 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               finalDataUrl = aiRes.cleanDataUrl;
               rawDataUrl = aiRes.rawDataUrl || compressed.dataUrl;
               isCleaned = true;
+              overlapWarn = Boolean(aiRes.overlapWarning);
+              overlapMsg = aiRes.overlapMessage || '';
               if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
               if (aiRes.topicId) detectedTopId = aiRes.topicId;
               if (aiRes.topicName) detectedTopName = aiRes.topicName;
               if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
-            } else {
-              const localClean = await applyDocumentWhiteningFilter(compressed.dataUrl);
-              finalDataUrl = localClean;
-              isCleaned = true;
             }
           } catch (aiErr) {
-            console.warn('AI batch file error, applying local filter:', aiErr);
-            try {
-              const localClean = await applyDocumentWhiteningFilter(compressed.dataUrl);
-              finalDataUrl = localClean;
-              isCleaned = true;
-            } catch {
-              // ignore
-            }
+            console.warn('AI batch file error:', aiErr);
           }
         }
 
@@ -789,7 +828,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           dataUrl: finalDataUrl,
           cleanDataUrl: isCleaned ? finalDataUrl : undefined,
           rawOriginalDataUrl: rawDataUrl,
+          originalUploadedUrl: compressed.dataUrl,
           isCleaned,
+          overlapWarning: overlapWarn,
+          overlapMessage: overlapMsg,
           mimeType: compressed.mimeType,
           width: compressed.width,
           height: compressed.height,
@@ -882,8 +924,8 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           studentId: student.id,
           examId: selectedExamId,
           questionId: qId,
-          originalDataUrl: item.rawOriginalDataUrl || item.dataUrl,
-          croppedDataUrl: item.dataUrl,
+          originalDataUrl: item.originalUploadedUrl || item.rawOriginalDataUrl || item.dataUrl,
+          croppedDataUrl: item.isCleaned && item.cleanDataUrl ? item.cleanDataUrl : (item.rawOriginalDataUrl || item.dataUrl),
           cropRect: null,
           rotation: 0,
           mimeType: item.mimeType,
@@ -1139,12 +1181,17 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         )}
                       </div>
 
-                      <div className="max-h-[46vh] max-w-full overflow-hidden rounded-xl border border-slate-700 bg-black flex items-center justify-center p-1">
+                      <div className="max-h-[46vh] max-w-full overflow-hidden rounded-xl border border-slate-700 bg-black flex flex-col items-center justify-center p-1">
                         <img
                           src={capturedPreview.dataUrl}
                           alt="Kırpılan Soru"
                           className="max-h-[44vh] max-w-full w-auto object-contain rounded-lg"
                         />
+                        {capturedPreview.overlapWarning && (
+                          <div className="mt-2 bg-amber-950/80 border border-amber-500/50 text-amber-200 text-[11px] px-3 py-1.5 rounded-xl max-w-md text-center">
+                            ⚠️ {capturedPreview.overlapMessage || 'Karalama basılı metin veya şeklin üzerine geldiği için orijinal korundu.'}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-1 w-full">
@@ -1195,6 +1242,21 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         >
                           <RotateCcw className="w-3.5 h-3.5 text-amber-400 rotate-180" />
                           <span>🔄 90° Döndür</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCroppingTarget({
+                              type: 'preview',
+                              imageUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
+                            });
+                          }}
+                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-slate-600 transition"
+                          title="Sorunun sınırlarını manuel olarak ayarlayın"
+                        >
+                          <Crop className="w-3.5 h-3.5 text-turquoise-400" />
+                          <span>✂️ Kırpmayı Ayarla</span>
                         </button>
 
                         {capturedPreview.rawOriginalDataUrl && (
@@ -1452,6 +1514,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               </span>
                             )}
                           </div>
+                          {item.overlapWarning && (
+                            <div className="mt-1 text-[9px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-center leading-tight">
+                              ⚠️ {item.overlapMessage || 'Karalama basılı metin üzerinde olduğundan orijinal korundu.'}
+                            </div>
+                          )}
 
                           {/* AI Clean Action */}
                           <button
@@ -1494,6 +1561,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                           >
                             <RotateCcw className="w-3 h-3 text-amber-600 rotate-180" />
                             <span>🔄 90° Döndür</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCroppingTarget({
+                                type: 'staged',
+                                tempId: item.tempId,
+                                imageUrl: item.rawOriginalDataUrl || item.dataUrl,
+                              });
+                            }}
+                            className="mt-1 w-full text-[10px] font-semibold flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 transition"
+                            title="Sorunun sınırlarını manuel olarak ayarlayın"
+                          >
+                            <Crop className="w-3 h-3 text-turquoise-600" />
+                            <span>✂️ Kırpmayı Ayarla</span>
                           </button>
 
                           <button
@@ -1861,6 +1944,69 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             setActiveDaksilItem(null);
           }}
         />
+      )}
+
+      {/* Freehand Crop Adjustment Modal */}
+      {croppingTarget && (
+        <div className="fixed inset-0 z-70 bg-navy-950/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[92vh] shadow-2xl">
+            <div className="p-3.5 bg-slate-950 text-white flex items-center justify-between border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2">
+                <Crop className="w-4 h-4 text-turquoise-400" />
+                <h4 className="text-sm font-bold">Sorunun Sınırlarını Ayarlayın (Kırpma)</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCroppingTarget(null)}
+                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 flex-1 overflow-auto bg-slate-950/60">
+              <FreehandImageCropper
+                imageUrl={croppingTarget.imageUrl}
+                onCancel={() => setCroppingTarget(null)}
+                onApplyCrop={async (rect) => {
+                  try {
+                    const newCropped = await applyCropAndRotation(croppingTarget.imageUrl, rect, 0);
+                    if (croppingTarget.type === 'preview' && capturedPreview) {
+                      setCapturedPreview({
+                        ...capturedPreview,
+                        dataUrl: newCropped,
+                        rawOriginalDataUrl: newCropped,
+                        cleanDataUrl: undefined,
+                        isCleaned: false,
+                        overlapWarning: false,
+                        overlapMessage: undefined,
+                      });
+                    } else if (croppingTarget.type === 'staged' && croppingTarget.tempId) {
+                      setStagedItems((prev) =>
+                        prev.map((it) =>
+                          it.tempId === croppingTarget.tempId
+                            ? {
+                                ...it,
+                                dataUrl: newCropped,
+                                rawOriginalDataUrl: newCropped,
+                                cleanDataUrl: undefined,
+                                isCleaned: false,
+                                overlapWarning: false,
+                                overlapMessage: undefined,
+                              }
+                            : it
+                        )
+                      );
+                    }
+                  } catch (cropErr: any) {
+                    setErrorMsg('Kırpma uygulanırken hata: ' + (cropErr?.message || ''));
+                  } finally {
+                    setCroppingTarget(null);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ChatGPT & Google Gemini AI Guidance Modal */}

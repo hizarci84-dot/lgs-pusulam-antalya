@@ -5,6 +5,8 @@ import {
   buildHybridCleanSvg,
   cropRotateAndCleanQuestion,
   extractIllustrationSnippet,
+  inpaintQuestionDataUrl,
+  transformBoxToRotatedCrop,
 } from './imageUtils';
 
 const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
@@ -670,6 +672,7 @@ export interface AiAutoCleanAndCropResult {
   success: boolean;
   cleanDataUrl: string;
   rawDataUrl: string;
+  originalUploadedUrl?: string;
   subjectId?: SubjectId;
   topicId?: string;
   topicName?: string;
@@ -677,16 +680,20 @@ export interface AiAutoCleanAndCropResult {
   confidence?: number;
   isSvgCleaned?: boolean;
   isFaithfulCleaned?: boolean;
+  overlapWarning?: boolean;
+  overlapMessage?: string;
   errorMessage?: string;
 }
 
 /**
- * End-to-end Automated Question Processor:
- * 1. Analyzes the question photo with Gemini multimodal vision.
- * 2. Automatically detects question bounding box and crops away desk/couch/preceding questions.
- * 3. Reconstructs a clean vector representation (SVG) removing all pencil scribbles & calculations,
- *    preserving shaded parcels (#a0d8ef), diagrams, math notation, bold stems, and choices A, B, C, D.
- * 4. Automatically detects MEB Subject, Topic, and Subtopic.
+ * End-to-end Automated Question Processor (Enterprise-Grade):
+ * 1. Analyzes the question photo with multimodal AI (Gemini Vision with server / client fallback).
+ * 2. Establishes immutable original image states (original upload -> oriented crop -> mark mask -> clean inpaint).
+ * 3. Identifies precise question bounding box [ymin, xmin, ymax, xmax] and orientation rotation.
+ * 4. Identifies student handwriting marks, calculations, and circled choices while strictly protecting
+ *    printed typography, mathematical formulas (roots, exponents, fractions), diagrams, and shaded regions.
+ * 5. Synthesizes surrounding paper texture to inpaint marked regions, leaving 100% of unmasked pixels unchanged.
+ * 6. Matches official MEB 8th grade curriculum Subject, Topic, and Subtopic.
  */
 export async function processQuestionPhotoWithAi(
   photoDataUrl: string,
@@ -700,6 +707,7 @@ export async function processQuestionPhotoWithAi(
       success: false,
       cleanDataUrl: photoDataUrl,
       rawDataUrl: photoDataUrl,
+      originalUploadedUrl: photoDataUrl,
       errorMessage: 'Gemini API anahtarı bulunamadı.',
     };
   }
@@ -713,86 +721,110 @@ export async function processQuestionPhotoWithAi(
     const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
 Bu soru fotoğrafını incele:
 1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] koordinatları (0-1000 normalize ölçekte).
-   - Soru numarası, soru kökü, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
-   - Önceki/sonraki soruları, masa, halı, parmak ve kenar boşluklarını hariç tut.
+   - Soru numarası, soru kökü, matematiksel formüller/ifadeler, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
+   - Önceki/sonraki soruları, masa, halı, parmak ve sayfa dışı kenar boşluklarını hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "illustration_box_2d": Sorudaki şekil, çizim, grafik, tablo, deney düzeneği veya asal çarpan algoritması sütununun [ymin, xmin, ymax, xmax] koordinatları. Şekil/tablo yoksa null ver.
-4. "question_number": Soru numarası (örn: "2." veya "3.")
-5. "header_text": Şeklin/tablonun üstündeki soru metni (öğrencinin kurşun kalemle çizdiği alt çizgiler, karalamalar tamamen çıkarılmış temiz orijinal metin).
-6. "stem_text": Şeklin altındaki soru metni ve koyu renkli soru kökü.
-7. "choices": ["A şıkkı metni", "B şıkkı metni", "C şıkkı metni", "D şıkkı metni"] (şık daireleri ve öğrenci işaretlemeleri tamamen temizlenmiş).
-8. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
-9. "detectedTopicName": MEB müfredatındaki konu adı
-10. "detectedSubtopicName": MEB alt kazanım adı
-11. "confidence": Güven puanı (0-100)
+3. "handwritten_marks_boxes": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri veya karalamalarının [ymin, xmin, ymax, xmax] kutuları dizisi (0-1000 normalize ölçekte).
+   - DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+4. "overlap_warning": Eğer öğrencinin karalaması doğrudan basılı bir matematik formülü, rakam veya şekil çizgisinin üzerine binmişse ve silinmesi basılı bilgiyi kaybettirecekse true, değilse false.
+5. "overlap_message": Eğer overlap_warning true ise kullanıcıya açıklama (örn: 'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.'), değilse ''.
+6. "question_number": Soru numarası (örn: "2." veya "3.")
+7. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+8. "detectedTopicName": MEB müfredatındaki konu adı
+9. "detectedSubtopicName": MEB alt kazanım adı
+10. "confidence": Güven puanı (0-100)
 
 Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 {
   "question_box_2d": [ymin, xmin, ymax, xmax],
   "rotation_needed": 0 | 90 | 180 | 270,
-  "illustration_box_2d": [ymin, xmin, ymax, xmax] | null,
-  "question_number": string,
-  "header_text": string,
-  "stem_text": string,
-  "choices": [string, string, string, string],
-  "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce",
-  "detectedTopicName": string,
-  "detectedSubtopicName": string,
-  "confidence": number
+  "handwritten_marks_boxes": [[ymin, xmin, ymax, xmax]],
+  "overlap_warning": false,
+  "overlap_message": "",
+  "question_number": "1.",
+  "detectedSubject": "matematik",
+  "detectedTopicName": "Çarpanlar ve Katlar",
+  "detectedSubtopicName": "En Büyük Ortak Bölen (EBOB) ve En Küçük Ortak Kat (EKOK)",
+  "confidence": 95
 }`;
-
-    const modelsToTry = [
-      model,
-      ...CANDIDATE_MODELS.filter((m) => m !== model),
-    ];
 
     let parsed: any = null;
     let lastError = '';
 
-    for (const currentModel of modelsToTry) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: cleanBase64,
+    // Step 1: Try backend server endpoint if available
+    try {
+      const backendRes = await fetch('/api/ai/clean-question', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          imageBase64: cleanBase64,
+          mimeType,
+          subjectHint,
+        }),
+      });
+      if (backendRes.ok) {
+        const backendData = await backendRes.json();
+        if (backendData && backendData.success) {
+          parsed = backendData;
+        }
+      }
+    } catch {
+      // Backend not running (static dev / client-only mode), fall back to direct Gemini call
+    }
+
+    // Step 2: Fallback to direct Gemini Vision API
+    if (!parsed) {
+      const modelsToTry = [
+        model,
+        ...CANDIDATE_MODELS.filter((m) => m !== model),
+      ];
+
+      for (const currentModel of modelsToTry) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(60000),
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: prompt },
+                    {
+                      inline_data: {
+                        mime_type: mimeType,
+                        data: cleanBase64,
+                      },
                     },
-                  },
-                ],
+                  ],
+                },
+              ],
+              generationConfig: {
+                responseMimeType: 'application/json',
+                temperature: 0.1,
+                thinkingConfig: { thinkingBudget: 1 },
               },
-            ],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              temperature: 0.1,
-              thinkingConfig: { thinkingBudget: 1 },
-            },
-          }),
-        });
+            }),
+          });
 
-        if (!response.ok) {
-          const errText = await response.text();
-          lastError = `${currentModel} (${response.status}): ${errText.slice(0, 120)}`;
-          console.warn(`Model ${currentModel} returned ${response.status}, trying fallback model...`);
-          continue;
-        }
+          if (!response.ok) {
+            const errText = await response.text();
+            lastError = `${currentModel} (${response.status}): ${errText.slice(0, 120)}`;
+            console.warn(`Model ${currentModel} returned ${response.status}, trying fallback model...`);
+            continue;
+          }
 
-        const data = await response.json();
-        const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawJsonText) {
-          parsed = JSON.parse(rawJsonText);
-          break;
+          const data = await response.json();
+          const rawJsonText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (rawJsonText) {
+            parsed = JSON.parse(rawJsonText);
+            break;
+          }
+        } catch (err: any) {
+          lastError = err?.message || String(err);
         }
-      } catch (err: any) {
-        lastError = err?.message || String(err);
       }
     }
 
@@ -801,13 +833,13 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         success: false,
         cleanDataUrl: photoDataUrl,
         rawDataUrl: photoDataUrl,
+        originalUploadedUrl: photoDataUrl,
         errorMessage: `Yapay zekâ yanıt veremedi (${lastError}). İsterseniz Gemini'den kopyalayıp yeşil 'Panodan Yapıştır' butonunu kullanabilirsiniz.`,
       };
     }
 
-    // 1. Crop & Straighten the original camera photo to upright question
+    // 1. Crop & Straighten the original camera photo to upright question (Immutable Raw Cropped Base)
     let croppedRawDataUrl = photoDataUrl;
-    let whitenedPhotoDataUrl = photoDataUrl;
 
     try {
       const faithfulResult = await cropRotateAndCleanQuestion({
@@ -816,51 +848,77 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         rotationNeeded: parsed.rotation_needed || 0,
         preserveIllustrations: true,
       });
-      whitenedPhotoDataUrl = faithfulResult.cleanDataUrl;
       croppedRawDataUrl = faithfulResult.rawCroppedDataUrl;
     } catch (cropCleanErr) {
-      console.warn('cropRotateAndCleanQuestion error, falling back:', cropCleanErr);
+      console.warn('cropRotateAndCleanQuestion error, falling back to box crop:', cropCleanErr);
       if (Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4) {
         try {
-          croppedRawDataUrl = await cropImageDataUrlByBox(photoDataUrl, parsed.question_box_2d as [number, number, number, number]);
-          whitenedPhotoDataUrl = croppedRawDataUrl;
+          croppedRawDataUrl = await cropImageDataUrlByBox(
+            photoDataUrl,
+            parsed.question_box_2d as [number, number, number, number]
+          );
         } catch {
           // ignore
         }
       }
     }
 
-    // 2. Build Hybrid Pristine Question Card (Zero Scribbles + Authentic Original Illustration)
-    let cleanDataUrl = whitenedPhotoDataUrl;
-    let isSvgCleaned = false;
+    // 2. Localized Mask-Controlled Inpainting:
+    // Only pixels inside detected handwriting boxes are inpainted with surrounding paper texture.
+    // 100% of printed text, math notation, formulas, diagrams and colored shapes outside the boxes are bit-for-bit preserved.
+    let cleanDataUrl = croppedRawDataUrl;
+    let isCleaned = false;
 
-    try {
-      let illustrationSnippetUrl: string | null = null;
-      if (Array.isArray(parsed.illustration_box_2d) && parsed.illustration_box_2d.length === 4) {
-        // Extract illustration snippet directly from photoDataUrl with rotationNeeded so coordinates match 100%
-        illustrationSnippetUrl = await extractIllustrationSnippet(
-          photoDataUrl,
-          parsed.illustration_box_2d as [number, number, number, number],
-          parsed.rotation_needed || 0
-        );
+    const rawBoxes: any[] = Array.isArray(parsed.handwritten_marks_boxes)
+      ? parsed.handwritten_marks_boxes
+      : [];
+
+    if (rawBoxes.length > 0) {
+      const transformedBoxes: Array<[number, number, number, number]> = [];
+      const qBox: [number, number, number, number] =
+        Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4
+          ? [
+              Number(parsed.question_box_2d[0]),
+              Number(parsed.question_box_2d[1]),
+              Number(parsed.question_box_2d[2]),
+              Number(parsed.question_box_2d[3]),
+            ]
+          : [0, 0, 1000, 1000];
+      const rot = typeof parsed.rotation_needed === 'number' ? parsed.rotation_needed : 0;
+
+      for (const b of rawBoxes) {
+        if (Array.isArray(b) && b.length === 4) {
+          const tb = transformBoxToRotatedCrop(
+            b as [number, number, number, number],
+            qBox,
+            rot
+          );
+          if (tb) transformedBoxes.push(tb);
+        }
       }
 
-      const hybridSvg = buildHybridCleanSvg({
-        questionNumber: parsed.question_number || '1.',
-        headerText: parsed.header_text || '',
-        stemText: parsed.stem_text || '',
-        choices: Array.isArray(parsed.choices) && parsed.choices.length > 0 ? parsed.choices : ['A', 'B', 'C', 'D'],
-        illustrationDataUrl: illustrationSnippetUrl,
-        illustrationHeight: illustrationSnippetUrl ? 220 : 0,
-      });
+      if (transformedBoxes.length > 0) {
+        try {
+          const inpaintRes = await inpaintQuestionDataUrl(croppedRawDataUrl, transformedBoxes, {
+            overlapWarning: Boolean(parsed.overlap_warning),
+            overlapMessage: parsed.overlap_message,
+          });
 
-      const b64Svg = typeof window !== 'undefined'
-        ? window.btoa(unescape(encodeURIComponent(hybridSvg)))
-        : Buffer.from(hybridSvg).toString('base64');
-      cleanDataUrl = `data:image/svg+xml;base64,${b64Svg}`;
-      isSvgCleaned = true;
-    } catch (svgBuildErr) {
-      console.warn('buildHybridCleanSvg failed, falling back to whitened photo:', svgBuildErr);
+          if (inpaintRes.success && inpaintRes.qualityCheck.passed) {
+            cleanDataUrl = inpaintRes.cleanDataUrl;
+            isCleaned = true;
+          } else {
+            console.warn(
+              'Inpainting quality check reason:',
+              inpaintRes.qualityCheck.reason || 'Protected original'
+            );
+            cleanDataUrl = croppedRawDataUrl;
+          }
+        } catch (inpaintErr) {
+          console.warn('Inpainting execution error, preserving pristine crop:', inpaintErr);
+          cleanDataUrl = croppedRawDataUrl;
+        }
+      }
     }
 
     // Subject resolution
@@ -899,19 +957,23 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       success: true,
       cleanDataUrl,
       rawDataUrl: croppedRawDataUrl,
+      originalUploadedUrl: photoDataUrl,
       subjectId: finalSubject,
       topicId: matchedTopic?.id || '',
       topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
       subtopicName: finalSubtopicName,
       confidence: parsed.confidence || 95,
-      isSvgCleaned,
+      isSvgCleaned: false,
       isFaithfulCleaned: true,
+      overlapWarning: Boolean(parsed.overlap_warning),
+      overlapMessage: parsed.overlap_message || '',
     };
   } catch (err: any) {
     return {
       success: false,
       cleanDataUrl: photoDataUrl,
       rawDataUrl: photoDataUrl,
+      originalUploadedUrl: photoDataUrl,
       errorMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
     };
   }

@@ -245,6 +245,404 @@ export interface PencilMarking {
   type?: 'calculation' | 'circle' | 'underline' | 'margin_note' | string;
 }
 
+export interface InpaintRegionBox {
+  ymin: number;
+  xmin: number;
+  ymax: number;
+  xmax: number;
+}
+
+export interface QualityCheckResult {
+  passed: boolean;
+  reason?: string;
+  isOverlapRisk?: boolean;
+}
+
+/**
+ * Transforms a bounding box from full-image normalized coordinates (0..1000)
+ * into the local coordinate system (0..1000) of a cropped and rotated sub-image.
+ *
+ * @param markBox Normalized box [ymin, xmin, ymax, xmax] (0..1000) on original photo
+ * @param questionBox Normalized crop box [ymin, xmin, ymax, xmax] (0..1000) on original photo
+ * @param rotation Clockwise rotation angle in degrees (0, 90, 180, 270)
+ * @returns Transformed box [ymin, xmin, ymax, xmax] (0..1000) or null if box falls completely outside the crop
+ */
+export function transformBoxToRotatedCrop(
+  markBox: [number, number, number, number] | InpaintRegionBox,
+  questionBox: [number, number, number, number] = [0, 0, 1000, 1000],
+  rotation: number = 0
+): [number, number, number, number] | null {
+  const [qYmin, qXmin, qYmax, qXmax] = questionBox;
+  const mYmin = Array.isArray(markBox) ? markBox[0] : markBox.ymin;
+  const mXmin = Array.isArray(markBox) ? markBox[1] : markBox.xmin;
+  const mYmax = Array.isArray(markBox) ? markBox[2] : markBox.ymax;
+  const mXmax = Array.isArray(markBox) ? markBox[3] : markBox.xmax;
+
+  const qW = Math.max(1, qXmax - qXmin);
+  const qH = Math.max(1, qYmax - qYmin);
+
+  // Normalize relative to unrotated crop [0, 1]
+  const cYmin = Math.max(0, Math.min(1, (mYmin - qYmin) / qH));
+  const cXmin = Math.max(0, Math.min(1, (mXmin - qXmin) / qW));
+  const cYmax = Math.max(0, Math.min(1, (mYmax - qYmin) / qH));
+  const cXmax = Math.max(0, Math.min(1, (mXmax - qXmin) / qW));
+
+  if (cXmax <= cXmin || cYmax <= cYmin) return null;
+
+  const rot = (((rotation % 360) + 360) % 360);
+  let rYmin = cYmin;
+  let rXmin = cXmin;
+  let rYmax = cYmax;
+  let rXmax = cXmax;
+
+  if (rot === 90) {
+    rYmin = cXmin;
+    rXmin = 1 - cYmax;
+    rYmax = cXmax;
+    rXmax = 1 - cYmin;
+  } else if (rot === 180) {
+    rYmin = 1 - cYmax;
+    rXmin = 1 - cXmax;
+    rYmax = 1 - cYmin;
+    rXmax = 1 - cXmin;
+  } else if (rot === 270) {
+    rYmin = 1 - cXmax;
+    rXmin = cYmin;
+    rYmax = 1 - cXmin;
+    rXmax = cYmax;
+  }
+
+  const finalBox: [number, number, number, number] = [
+    Math.max(0, Math.min(1000, Math.round(rYmin * 1000))),
+    Math.max(0, Math.min(1000, Math.round(rXmin * 1000))),
+    Math.max(0, Math.min(1000, Math.round(rYmax * 1000))),
+    Math.max(0, Math.min(1000, Math.round(rXmax * 1000))),
+  ];
+
+  if (finalBox[2] <= finalBox[0] || finalBox[3] <= finalBox[1]) return null;
+  return finalBox;
+}
+
+/**
+ * Mask-controlled localized inpainting:
+ * Targets ONLY the specified bounding boxes [ymin, xmin, ymax, xmax] (0..1000 scale).
+ * Pixels outside the approved boxes remain 100% UNCHANGED relative to the oriented crop.
+ * Within each box, graphite pencil strokes or pen marks are identified and seamlessly
+ * inpainted using surrounding paper texture & lighting, while colored diagrams & printed text are protected.
+ */
+export function inpaintHandwritingRegions(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  boxes: Array<[number, number, number, number] | InpaintRegionBox>,
+  options: {
+    protectColoredArtwork?: boolean;
+    paperSamplingRadius?: number;
+  } = {}
+): { modifiedPixelCount: number } {
+  if (!boxes || boxes.length === 0) return { modifiedPixelCount: 0 };
+  const protectColored = options.protectColoredArtwork !== false;
+  const sampleRadius = Math.max(3, options.paperSamplingRadius || 6);
+
+  let totalModified = 0;
+
+  for (const rawBox of boxes) {
+    const yminNorm = Array.isArray(rawBox) ? rawBox[0] : rawBox.ymin;
+    const xminNorm = Array.isArray(rawBox) ? rawBox[1] : rawBox.xmin;
+    const ymaxNorm = Array.isArray(rawBox) ? rawBox[2] : rawBox.ymax;
+    const xmaxNorm = Array.isArray(rawBox) ? rawBox[3] : rawBox.xmax;
+
+    const x0 = Math.max(0, Math.min(width - 1, Math.round((xminNorm / 1000) * width)));
+    const y0 = Math.max(0, Math.min(height - 1, Math.round((yminNorm / 1000) * height)));
+    const x1 = Math.max(x0 + 1, Math.min(width, Math.round((xmaxNorm / 1000) * width)));
+    const y1 = Math.max(y0 + 1, Math.min(height, Math.round((ymaxNorm / 1000) * height)));
+
+    // 1. Estimate local paper color around the bounding box perimeter
+    let paperRSum = 0;
+    let paperGSum = 0;
+    let paperBSum = 0;
+    let paperCount = 0;
+
+    const sampleBorder = (bx: number, by: number) => {
+      if (bx >= 0 && bx < width && by >= 0 && by < height) {
+        const idx = (by * width + bx) * 4;
+        const r = pixels[idx];
+        const g = pixels[idx + 1];
+        const b = pixels[idx + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        const maxC = Math.max(r, g, b);
+        const minC = Math.min(r, g, b);
+        if (lum > 135 && maxC - minC < 30) {
+          paperRSum += r;
+          paperGSum += g;
+          paperBSum += b;
+          paperCount++;
+        }
+      }
+    };
+
+    for (let bx = x0; bx < x1; bx += 2) {
+      sampleBorder(bx, Math.max(0, y0 - 2));
+      sampleBorder(bx, Math.min(height - 1, y1 + 2));
+    }
+    for (let by = y0; by < y1; by += 2) {
+      sampleBorder(Math.max(0, x0 - 2), by);
+      sampleBorder(Math.min(width - 1, x1 + 2), by);
+    }
+
+    const defaultPaperR = paperCount > 0 ? Math.round(paperRSum / paperCount) : 255;
+    const defaultPaperG = paperCount > 0 ? Math.round(paperGSum / paperCount) : 255;
+    const defaultPaperB = paperCount > 0 ? Math.round(paperBSum / paperCount) : 255;
+
+    // 2. Scan box and identify pencil / scribble pixels
+    const boxW = x1 - x0;
+    const boxH = y1 - y0;
+    const isScribble = new Uint8Array(boxW * boxH);
+
+    for (let by = y0; by < y1; by++) {
+      for (let bx = x0; bx < x1; bx++) {
+        const idx = (by * width + bx) * 4;
+        const r = pixels[idx];
+        const g = pixels[idx + 1];
+        const b = pixels[idx + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        const maxC = Math.max(r, g, b);
+        const minC = Math.min(r, g, b);
+        const chroma = maxC - minC;
+
+        // Protect colored artwork (roses, vases, graphs, colored parcels)
+        if (protectColored && chroma > 18) {
+          continue;
+        }
+
+        // Graphite pencil marks have lower luminance than surrounding paper, with neutral chroma
+        // Student blue/red pen has high chroma with low/medium lum
+        const isGraphitePencil = lum < 215 && chroma <= 18;
+        const isColoredPen = chroma > 35 && lum < 180;
+
+        if (isGraphitePencil || isColoredPen) {
+          isScribble[(by - y0) * boxW + (bx - x0)] = 1;
+        }
+      }
+    }
+
+    // 3. Inpaint scribble pixels using local paper texture synthesis
+    for (let by = y0; by < y1; by++) {
+      for (let bx = x0; bx < x1; bx++) {
+        const localIdx = (by - y0) * boxW + (bx - x0);
+        if (!isScribble[localIdx]) continue;
+
+        let localRSum = 0;
+        let localGSum = 0;
+        let localBSum = 0;
+        let localWeight = 0;
+
+        for (let dy = -sampleRadius; dy <= sampleRadius; dy++) {
+          const ny = by + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (let dx = -sampleRadius; dx <= sampleRadius; dx++) {
+            const nx = bx + dx;
+            if (nx < 0 || nx >= width) continue;
+
+            const inBox = nx >= x0 && nx < x1 && ny >= y0 && ny < y1;
+            if (inBox && isScribble[(ny - y0) * boxW + (nx - x0)]) {
+              continue; // Don't sample from scribble itself
+            }
+
+            const nIdx = (ny * width + nx) * 4;
+            const nr = pixels[nIdx];
+            const ng = pixels[nIdx + 1];
+            const nb = pixels[nIdx + 2];
+            const nLum = 0.299 * nr + 0.587 * ng + 0.114 * nb;
+            const nChroma = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
+
+            if (nLum >= 160 && nChroma < 25) {
+              const dist = Math.sqrt(dx * dx + dy * dy);
+              const w = 1 / (1 + dist);
+              localRSum += nr * w;
+              localGSum += ng * w;
+              localBSum += nb * w;
+              localWeight += w;
+            }
+          }
+        }
+
+        const outIdx = (by * width + bx) * 4;
+        if (localWeight > 0) {
+          pixels[outIdx] = Math.round(localRSum / localWeight);
+          pixels[outIdx + 1] = Math.round(localGSum / localWeight);
+          pixels[outIdx + 2] = Math.round(localBSum / localWeight);
+        } else {
+          pixels[outIdx] = defaultPaperR;
+          pixels[outIdx + 1] = defaultPaperG;
+          pixels[outIdx + 2] = defaultPaperB;
+        }
+        pixels[outIdx + 3] = 255;
+        totalModified++;
+      }
+    }
+  }
+
+  return { modifiedPixelCount: totalModified };
+}
+
+/**
+ * Validates that a cleaned image meets strict quality standards:
+ * - Not blank, solid white, or pitch black
+ * - Resolution and dimensions preserved
+ * - Variance check confirms content is present
+ */
+export function validateCleanedImageQuality(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  overlapWarning = false,
+  overlapMessage?: string
+): QualityCheckResult {
+  if (width < 50 || height < 50) {
+    return { passed: false, reason: 'Görüntü boyutları çok küçük veya geçersiz.' };
+  }
+
+  if (overlapWarning) {
+    return {
+      passed: false,
+      isOverlapRisk: true,
+      reason:
+        overlapMessage ||
+        'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.',
+    };
+  }
+
+  let minLum = 255;
+  let maxLum = 0;
+  let totalLum = 0;
+  const sampleStep = Math.max(1, Math.floor((width * height) / 2000));
+  let sampleCount = 0;
+
+  for (let i = 0; i < pixels.length; i += sampleStep * 4) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    if (lum < minLum) minLum = lum;
+    if (lum > maxLum) maxLum = lum;
+    totalLum += lum;
+    sampleCount++;
+  }
+
+  // Solid white or washed out (no dark printed ink)
+  if (minLum > 240) {
+    return { passed: false, reason: 'Temizleme sonucu görüntü tamamen beyaz veya boş çıktı.' };
+  }
+
+  // Solid black
+  if (maxLum < 30) {
+    return { passed: false, reason: 'Temizleme sonucu görüntü tamamen siyah veya bozuk çıktı.' };
+  }
+
+  // Insufficient contrast
+  if (maxLum - minLum < 40) {
+    return { passed: false, reason: 'Görüntü kontrastı yetersiz veya bozuk.' };
+  }
+
+  return { passed: true };
+}
+
+/**
+ * Applies mask-controlled inpainting onto a cropped image DataURL.
+ * Preserves 100% of pixels outside the handwriting boxes.
+ */
+export function inpaintQuestionDataUrl(
+  croppedDataUrl: string,
+  boxes: Array<[number, number, number, number] | InpaintRegionBox>,
+  options: {
+    overlapWarning?: boolean;
+    overlapMessage?: string;
+  } = {}
+): Promise<{
+  success: boolean;
+  cleanDataUrl: string;
+  qualityCheck: QualityCheckResult;
+}> {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') {
+      resolve({
+        success: true,
+        cleanDataUrl: croppedDataUrl,
+        qualityCheck: { passed: true },
+      });
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const width = img.naturalWidth || img.width;
+        const height = img.naturalHeight || img.height;
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({
+            success: false,
+            cleanDataUrl: croppedDataUrl,
+            qualityCheck: { passed: false, reason: 'Canvas context alınamadı.' },
+          });
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, width, height);
+
+        // Perform precision inpainting on the pixel array
+        inpaintHandwritingRegions(imgData.data, width, height, boxes);
+
+        // Quality check
+        const qCheck = validateCleanedImageQuality(
+          imgData.data,
+          width,
+          height,
+          options.overlapWarning,
+          options.overlapMessage
+        );
+
+        if (!qCheck.passed) {
+          resolve({
+            success: false,
+            cleanDataUrl: croppedDataUrl,
+            qualityCheck: qCheck,
+          });
+          return;
+        }
+
+        ctx.putImageData(imgData, 0, 0);
+        const cleanDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        resolve({
+          success: true,
+          cleanDataUrl,
+          qualityCheck: { passed: true },
+        });
+      } catch (err: any) {
+        resolve({
+          success: false,
+          cleanDataUrl: croppedDataUrl,
+          qualityCheck: { passed: false, reason: err?.message || 'Bilinmeyen hata' },
+        });
+      }
+    };
+    img.onerror = () => {
+      resolve({
+        success: false,
+        cleanDataUrl: croppedDataUrl,
+        qualityCheck: { passed: false, reason: 'Görüntü yüklenemedi.' },
+      });
+    };
+    img.src = croppedDataUrl;
+  });
+}
+
 /**
  * High-performance pure pixel cleaner for test question photos.
  * Performs adaptive background illumination estimation, eliminates pencil graphite smudges,

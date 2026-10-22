@@ -181,4 +181,107 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     // Ensure authentic illustration image is embedded
     expect(svg).toContain('href="data:image/jpeg;base64,mockFlowerData"');
   });
+
+  it('6. inpaintHandwritingRegions: Yalnızca belirlenen karalama kutusundaki kurşun kalem yazılarını temizlemeli, dışındaki pikselleri %100 korumalıdır', async () => {
+    const { inpaintHandwritingRegions } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+
+    // Fill with natural paper background (R=240, G=238, B=235)
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 240;
+      pixels[i + 1] = 238;
+      pixels[i + 2] = 235;
+      pixels[i + 3] = 255;
+    }
+
+    // A critical printed mathematical formula OUTSIDE the handwriting box: e.g. "√48 - 2^5" at (15, 15)
+    const printedMathIdx = (15 * width + 15) * 4;
+    pixels[printedMathIdx] = 20;
+    pixels[printedMathIdx + 1] = 20;
+    pixels[printedMathIdx + 2] = 20;
+
+    // Student pencil scribble INSIDE the handwriting box [500, 500, 800, 800] -> at (60, 60)
+    const scribbleIdx = (60 * width + 60) * 4;
+    pixels[scribbleIdx] = 140; // graphite pencil
+    pixels[scribbleIdx + 1] = 140;
+    pixels[scribbleIdx + 2] = 140;
+
+    // Inpaint ONLY box [500, 500, 800, 800] (normalized 0..1000)
+    const result = inpaintHandwritingRegions(pixels, width, height, [
+      [500, 500, 800, 800],
+    ]);
+
+    expect(result.modifiedPixelCount).toBeGreaterThan(0);
+
+    // 1. Printed math outside the box MUST BE 100% BIT-FOR-BIT UNTOUCHED!
+    expect(pixels[printedMathIdx]).toBe(20);
+    expect(pixels[printedMathIdx + 1]).toBe(20);
+    expect(pixels[printedMathIdx + 2]).toBe(20);
+
+    // 2. The pencil scribble inside the box must be inpainted to paper texture (>= 220)
+    expect(pixels[scribbleIdx]).toBeGreaterThanOrEqual(220);
+    expect(pixels[scribbleIdx + 1]).toBeGreaterThanOrEqual(220);
+    expect(pixels[scribbleIdx + 2]).toBeGreaterThanOrEqual(220);
+  });
+
+  it('7. validateCleanedImageQuality: Boş veya bozuk görüntüleri ve örtüşme riskini tespit etmelidir', async () => {
+    const { validateCleanedImageQuality } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+
+    // 1. Solid pure white image (washed out / deleted content)
+    const blankPixels = new Uint8ClampedArray(width * height * 4).fill(255);
+    const blankCheck = validateCleanedImageQuality(blankPixels, width, height);
+    expect(blankCheck.passed).toBe(false);
+
+    // 2. Normal question image with text and paper
+    const normalPixels = new Uint8ClampedArray(width * height * 4).fill(245);
+    for (let i = 0; i < 500; i++) {
+      normalPixels[i * 4] = 20; // dark printed text
+      normalPixels[i * 4 + 1] = 20;
+      normalPixels[i * 4 + 2] = 20;
+    }
+    const normalCheck = validateCleanedImageQuality(normalPixels, width, height);
+    expect(normalCheck.passed).toBe(true);
+
+    // 3. Overlap warning check: karalama basılı yazının üzerine geldiğinde orijinal korunmalı
+    const overlapCheck = validateCleanedImageQuality(
+      normalPixels,
+      width,
+      height,
+      true,
+      'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.'
+    );
+    expect(overlapCheck.passed).toBe(false);
+    expect(overlapCheck.isOverlapRisk).toBe(true);
+    expect(overlapCheck.reason).toContain('orijinal görüntüyü koruduk');
+  });
+
+  it('8. transformBoxToRotatedCrop: Koordinat dönüşümünü ve rotasyonları doğru hesaplamalıdır', async () => {
+    const { transformBoxToRotatedCrop } = await import('../src/services/imageUtils');
+
+    // Case 1: No crop, no rotation (identity)
+    const box1: [number, number, number, number] = [100, 200, 300, 400];
+    const res1 = transformBoxToRotatedCrop(box1, [0, 0, 1000, 1000], 0);
+    expect(res1).toEqual([100, 200, 300, 400]);
+
+    // Case 2: Sub-crop (question is in [500, 500, 1000, 1000]), mark is at [600, 600, 800, 800]
+    // In local crop coords: 600 is (600-500)/500 = 0.2 -> 200, 800 is (800-500)/500 = 0.6 -> 600
+    const res2 = transformBoxToRotatedCrop([600, 600, 800, 800], [500, 500, 1000, 1000], 0);
+    expect(res2).toEqual([200, 200, 600, 600]);
+
+    // Case 3: Mark outside the crop box
+    const res3 = transformBoxToRotatedCrop([100, 100, 200, 200], [500, 500, 1000, 1000], 0);
+    expect(res3).toBeNull();
+
+    // Case 4: 90 degree clockwise rotation
+    // Top-left box in crop [100, 100, 200, 200]
+    // Rotated 90 deg clockwise -> should move to top-right: y: [100, 200], x: [1000-200, 1000-100] = [800, 900]
+    const res4 = transformBoxToRotatedCrop([100, 100, 200, 200], [0, 0, 1000, 1000], 90);
+    expect(res4).toEqual([100, 800, 200, 900]);
+  });
 });
