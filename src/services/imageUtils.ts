@@ -562,10 +562,12 @@ export function cropRotateAndCleanQuestion(params: {
 /**
  * Extracts the authentic illustration/diagram snippet from the question image
  * and applies background whitening so it blends seamlessly into the clean card.
+ * Supports rotation if original camera image was taken sideways or upside down.
  */
 export function extractIllustrationSnippet(
   dataUrl: string,
-  box: [number, number, number, number] // [ymin, xmin, ymax, xmax] 0..1000
+  box: [number, number, number, number], // [ymin, xmin, ymax, xmax] 0..1000
+  rotationNeeded = 0
 ): Promise<string> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined') {
@@ -586,24 +588,55 @@ export function extractIllustrationSnippet(
         const w = Math.max(20, Math.min(W - x0, Math.round(((xmax - xmin) / 1000) * W)));
         const h = Math.max(20, Math.min(H - y0, Math.round(((ymax - ymin) / 1000) * H)));
 
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = w;
+        cropCanvas.height = h;
+        const cCtx = cropCanvas.getContext('2d');
+        if (!cCtx) {
           resolve(dataUrl);
           return;
         }
 
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+        cCtx.fillStyle = '#ffffff';
+        cCtx.fillRect(0, 0, w, h);
+        cCtx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
 
-        const imgData = ctx.getImageData(0, 0, w, h);
-        cleanImageDataPixels(imgData.data, w, h, { preserveIllustrations: true, cleanBorders: false });
-        ctx.putImageData(imgData, 0, 0);
+        // If rotation is needed to make upright
+        const rot = (((rotationNeeded || 0) % 360) + 360) % 360;
+        let uprightCanvas = cropCanvas;
 
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
+        if (rot !== 0) {
+          uprightCanvas = document.createElement('canvas');
+          if (rot === 90 || rot === 270) {
+            uprightCanvas.width = h;
+            uprightCanvas.height = w;
+          } else {
+            uprightCanvas.width = w;
+            uprightCanvas.height = h;
+          }
+          const uCtx = uprightCanvas.getContext('2d');
+          if (uCtx) {
+            uCtx.fillStyle = '#ffffff';
+            uCtx.fillRect(0, 0, uprightCanvas.width, uprightCanvas.height);
+            uCtx.save();
+            uCtx.translate(uprightCanvas.width / 2, uprightCanvas.height / 2);
+            uCtx.rotate((rot * Math.PI) / 180);
+            uCtx.drawImage(cropCanvas, -w / 2, -h / 2);
+            uCtx.restore();
+          }
+        }
+
+        const uCtx = uprightCanvas.getContext('2d');
+        const imgData = uCtx?.getImageData(0, 0, uprightCanvas.width, uprightCanvas.height);
+        if (imgData && uCtx) {
+          cleanImageDataPixels(imgData.data, uprightCanvas.width, uprightCanvas.height, {
+            preserveIllustrations: true,
+            cleanBorders: false,
+          });
+          uCtx.putImageData(imgData, 0, 0);
+        }
+
+        resolve(uprightCanvas.toDataURL('image/jpeg', 0.92));
       } catch {
         resolve(dataUrl);
       }
@@ -613,7 +646,7 @@ export function extractIllustrationSnippet(
 }
 
 function escapeXml(unsafe: string): string {
-  return unsafe
+  return String(unsafe || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -633,51 +666,63 @@ export function buildHybridCleanSvg(params: {
   choices?: string[];
   illustrationDataUrl?: string | null;
   illustrationHeight?: number;
+  [key: string]: any;
 }): string {
-  const {
-    questionNumber = '1.',
-    headerText = '',
-    stemText = '',
-    choices = ['A', 'B', 'C', 'D'],
-    illustrationDataUrl = null,
-    illustrationHeight = 220,
-  } = params;
+  const questionNumber = params.questionNumber || params.question_number || '1.';
+  let headerText = params.headerText || params.header_text || '';
+  const stemText = params.stemText || params.stem_text || '';
+  const rawChoices = params.choices || ['A', 'B', 'C', 'D'];
+  const illustrationDataUrl = params.illustrationDataUrl || params.illustration_data_url || null;
+  const illustrationHeight = params.illustrationHeight || 220;
 
   function wrapText(text: string, maxChars = 68): string[] {
     if (!text) return [];
-    const words = text.split(' ');
+    const paragraphs = text.split('\n');
     const lines: string[] = [];
-    let currentLine = '';
-    for (const w of words) {
-      if ((currentLine + ' ' + w).trim().length > maxChars) {
-        if (currentLine) lines.push(currentLine.trim());
-        currentLine = w;
-      } else {
-        currentLine = (currentLine + ' ' + w).trim();
+    for (const p of paragraphs) {
+      const words = p.split(/\s+/).filter(Boolean);
+      let currentLine = '';
+      for (const w of words) {
+        if ((currentLine + ' ' + w).trim().length > maxChars) {
+          if (currentLine) lines.push(currentLine.trim());
+          currentLine = w;
+        } else {
+          currentLine = (currentLine + ' ' + w).trim();
+        }
       }
+      if (currentLine) lines.push(currentLine.trim());
     }
-    if (currentLine) lines.push(currentLine.trim());
     return lines;
+  }
+
+  // Avoid repeating question number if already prefixed in headerText
+  const qNumPrefix = questionNumber.replace(/[\.\s]+$/, '').trim();
+  if (qNumPrefix && headerText.trim().startsWith(qNumPrefix)) {
+    headerText = headerText.trim().replace(new RegExp(`^${qNumPrefix}[\\.\\-\\)\\s]+`), '').trim();
   }
 
   const headerLines = wrapText(headerText, 68);
   const stemLines = wrapText(stemText, 68);
 
-  let currentY = 55;
-  const headerTspans = headerLines
-    .map((line, idx) => {
-      const y = currentY;
-      currentY += 28;
-      if (idx === 0) {
-        return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b"><tspan font-weight="bold" fill="#0f172a">${escapeXml(
-          questionNumber
-        )} </tspan>${escapeXml(line)}</text>`;
-      }
-      return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b">${escapeXml(
-        line
-      )}</text>`;
-    })
-    .join('\n  ');
+  let currentY = 50;
+  let headerTspans = '';
+
+  if (headerLines.length > 0) {
+    headerTspans = headerLines
+      .map((line, idx) => {
+        const y = currentY;
+        currentY += 28;
+        if (idx === 0) {
+          return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b"><tspan font-weight="bold" fill="#0f172a">${escapeXml(
+            questionNumber
+          )} </tspan>${escapeXml(line)}</text>`;
+        }
+        return `<text x="50" y="${y}" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="18" fill="#1e293b">${escapeXml(
+          line
+        )}</text>`;
+      })
+      .join('\n  ');
+  }
 
   let illBlock = '';
   if (illustrationDataUrl) {
@@ -686,14 +731,14 @@ export function buildHybridCleanSvg(params: {
     illBlock = `
   <!-- Authentic Real Illustration Embedded Directly -->
   <g transform="translate(50, ${illY})">
-    <rect width="700" height="${illustrationHeight}" fill="#ffffff" />
+    <rect width="700" height="${illustrationHeight}" fill="#ffffff" rx="8"/>
     <image href="${illustrationDataUrl}" x="10" y="10" width="680" height="${
       illustrationHeight - 20
     }" preserveAspectRatio="xMidYMid meet" />
   </g>`;
     currentY += illustrationHeight + 25;
   } else {
-    currentY += 15;
+    currentY += 10;
   }
 
   const stemTspans = stemLines
@@ -710,23 +755,56 @@ export function buildHybridCleanSvg(params: {
   currentY += 25;
   const choiceY = currentY;
   const choiceLetters = ['A', 'B', 'C', 'D'];
-  const choiceElements = (choices.length > 0 ? choices : ['A', 'B', 'C', 'D'])
+  const sanitizedChoices = (rawChoices.length > 0 ? rawChoices : ['A', 'B', 'C', 'D'])
     .slice(0, 4)
-    .map((c, i) => {
-      const x = 50 + i * 180;
-      return `
+    .map((c) => {
+      const s = String(c ?? '').trim();
+      return s.replace(/^\(?[A-Da-d]\)?[\.\)\:\-\s]*/, '').trim() || s;
+    });
+
+  const isLongChoices = sanitizedChoices.some((c) => c.length > 16);
+  let choiceElements = '';
+  let choiceBlockHeight = 70;
+
+  if (!isLongChoices) {
+    // 4 choices side-by-side
+    choiceElements = sanitizedChoices
+      .map((c, i) => {
+        const x = 50 + i * 180;
+        return `
     <g transform="translate(${x}, ${choiceY})">
       <rect width="165" height="46" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
       <text x="16" y="28" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="17" font-weight="bold" fill="#0f172a">${
         choiceLetters[i]
       }) <tspan font-weight="normal" fill="#334155">${escapeXml(c)}</tspan></text>
     </g>`;
-    })
-    .join('');
+      })
+      .join('');
+    choiceBlockHeight = 70;
+  } else {
+    // 2x2 grid for long options
+    choiceElements = sanitizedChoices
+      .map((c, i) => {
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const x = 50 + col * 360;
+        const y = choiceY + row * 56;
+        return `
+    <g transform="translate(${x}, ${y})">
+      <rect width="340" height="46" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+      <text x="16" y="28" font-family="'Segoe UI', -apple-system, Arial, sans-serif" font-size="16" font-weight="bold" fill="#0f172a">${
+        choiceLetters[i]
+      }) <tspan font-weight="normal" fill="#334155">${escapeXml(c)}</tspan></text>
+    </g>`;
+      })
+      .join('');
+    choiceBlockHeight = 125;
+  }
 
-  const totalHeight = choiceY + 75;
+  const totalHeight = choiceY + choiceBlockHeight + 20;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 ${totalHeight}" width="800" height="${totalHeight}" style="background-color:#ffffff;">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 ${totalHeight}" width="800" height="${totalHeight}">
+  <rect width="800" height="${totalHeight}" rx="12" fill="#ffffff" />
   ${headerTspans}
   ${illBlock}
   ${stemTspans}

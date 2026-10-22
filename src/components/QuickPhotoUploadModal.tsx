@@ -23,6 +23,7 @@ import {
 } from '../data/curriculum';
 import {
   applyCropAndRotation,
+  applyDocumentWhiteningFilter,
   autoCleanStudentScribbles,
   readAndCompressImageFile,
 } from '../services/imageUtils';
@@ -62,6 +63,7 @@ interface QuickPhotoUploadModalProps {
 interface StagedQuestionItem {
   tempId: string;
   dataUrl: string;
+  cleanDataUrl?: string;
   rawOriginalDataUrl?: string;
   isCleaned?: boolean;
   mimeType: string;
@@ -499,20 +501,29 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         setAiProcessingNotice('✨ Yapay Zekâ soruyu otomatik kırpıyor, karalamaları temizliyor ve MEB konusunu belirliyor...');
         try {
           const aiRes = await processQuestionPhotoWithAi(rawDataUrl, batchSubjectId);
-          if (aiRes.success) {
+          if (aiRes.success && aiRes.cleanDataUrl) {
             finalDataUrl = aiRes.cleanDataUrl;
             croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
-            isCleaned = Boolean(aiRes.isFaithfulCleaned || aiRes.isSvgCleaned || (aiRes.cleanDataUrl && aiRes.cleanDataUrl !== (aiRes.rawDataUrl || rawDataUrl)));
+            isCleaned = true;
             if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
             if (aiRes.topicId) detectedTopId = aiRes.topicId;
             if (aiRes.topicName) detectedTopName = aiRes.topicName;
             if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
-          } else if (aiRes.errorMessage) {
-            setErrorMsg(aiRes.errorMessage);
+          } else {
+            // Fallback to local whitening filter
+            const localClean = await applyDocumentWhiteningFilter(rawDataUrl);
+            finalDataUrl = localClean;
+            isCleaned = true;
           }
         } catch (aiErr: any) {
-          console.warn('Yapay zekâ işleme hatası, orijinal kullanılıyor:', aiErr);
-          setErrorMsg('Yapay zekâ temizleme hatası: ' + (aiErr?.message || ''));
+          console.warn('Yapay zekâ işleme hatası, yerel filtre kullanılıyor:', aiErr);
+          try {
+            const localClean = await applyDocumentWhiteningFilter(rawDataUrl);
+            finalDataUrl = localClean;
+            isCleaned = true;
+          } catch {
+            // ignore
+          }
         } finally {
           setIsAiProcessing(false);
           setAiProcessingNotice(null);
@@ -557,10 +568,27 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           subtopicName: aiRes.subtopicName || capturedPreview.subtopicName,
         });
       } else {
-        setErrorMsg(aiRes.errorMessage || 'Yapay zekâ temizleme işlemi tamamlanamadı.');
+        const localClean = await applyDocumentWhiteningFilter(src);
+        setCapturedPreview({
+          ...capturedPreview,
+          dataUrl: localClean,
+          cleanDataUrl: localClean,
+          isCleaned: true,
+        });
       }
     } catch (err: any) {
-      setErrorMsg('Temizleme hatası: ' + (err?.message || ''));
+      try {
+        const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
+        const localClean = await applyDocumentWhiteningFilter(src);
+        setCapturedPreview({
+          ...capturedPreview,
+          dataUrl: localClean,
+          cleanDataUrl: localClean,
+          isCleaned: true,
+        });
+      } catch {
+        setErrorMsg('Temizleme hatası: ' + (err?.message || ''));
+      }
     } finally {
       setIsAiProcessing(false);
       setAiProcessingNotice(null);
@@ -580,6 +608,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               ? {
                   ...p,
                   dataUrl: res.cleanDataUrl,
+                  cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: res.rawDataUrl || p.rawOriginalDataUrl || p.dataUrl,
                   isCleaned: true,
                   subjectId: res.subjectId || p.subjectId,
@@ -600,10 +629,39 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           }));
         }
       } else {
-        setErrorMsg(res.errorMessage || 'Yapay zekâ soruyu temizleyemedi. Lütfen tekrar deneyin.');
+        const localClean = await applyDocumentWhiteningFilter(src);
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? {
+                  ...p,
+                  dataUrl: localClean,
+                  cleanDataUrl: localClean,
+                  isCleaned: true,
+                }
+              : p
+          )
+        );
       }
     } catch (err: any) {
-      setErrorMsg('Yapay zekâ temizleme hatası: ' + (err?.message || ''));
+      try {
+        const src = item.rawOriginalDataUrl || item.dataUrl;
+        const localClean = await applyDocumentWhiteningFilter(src);
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? {
+                  ...p,
+                  dataUrl: localClean,
+                  cleanDataUrl: localClean,
+                  isCleaned: true,
+                }
+              : p
+          )
+        );
+      } catch {
+        setErrorMsg('Yapay zekâ temizleme hatası: ' + (err?.message || ''));
+      }
     } finally {
       setCleaningTempId(null);
     }
@@ -670,6 +728,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     const newItem: StagedQuestionItem = {
       tempId,
       dataUrl: capturedPreview.dataUrl,
+      cleanDataUrl: capturedPreview.cleanDataUrl || (capturedPreview.isCleaned ? capturedPreview.dataUrl : undefined),
       rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
       isCleaned: Boolean(capturedPreview.isCleaned),
       mimeType: 'image/jpeg',
@@ -720,17 +779,28 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         if (autoAiDetect && getStoredGeminiApiKey()) {
           try {
             const aiRes = await processQuestionPhotoWithAi(compressed.dataUrl, batchSubjectId);
-            if (aiRes.success) {
+            if (aiRes.success && aiRes.cleanDataUrl) {
               finalDataUrl = aiRes.cleanDataUrl;
               rawDataUrl = aiRes.rawDataUrl || compressed.dataUrl;
-              isCleaned = Boolean(aiRes.isFaithfulCleaned || aiRes.isSvgCleaned || (aiRes.cleanDataUrl && aiRes.cleanDataUrl !== (aiRes.rawDataUrl || compressed.dataUrl)));
+              isCleaned = true;
               if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
               if (aiRes.topicId) detectedTopId = aiRes.topicId;
               if (aiRes.topicName) detectedTopName = aiRes.topicName;
               if (aiRes.subtopicName) detectedSubtop = aiRes.subtopicName;
+            } else {
+              const localClean = await applyDocumentWhiteningFilter(compressed.dataUrl);
+              finalDataUrl = localClean;
+              isCleaned = true;
             }
           } catch (aiErr) {
-            console.warn('AI batch file error:', aiErr);
+            console.warn('AI batch file error, applying local filter:', aiErr);
+            try {
+              const localClean = await applyDocumentWhiteningFilter(compressed.dataUrl);
+              finalDataUrl = localClean;
+              isCleaned = true;
+            } catch {
+              // ignore
+            }
           }
         }
 
@@ -749,6 +819,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         added.push({
           tempId,
           dataUrl: finalDataUrl,
+          cleanDataUrl: isCleaned ? finalDataUrl : undefined,
           rawOriginalDataUrl: rawDataUrl,
           isCleaned,
           mimeType: compressed.mimeType,
@@ -778,19 +849,22 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       setStagedItems((prev) =>
         prev.map((p) =>
           p.tempId === item.tempId
-            ? { ...p, dataUrl: item.rawOriginalDataUrl!, isCleaned: false }
+            ? { ...p, dataUrl: item.rawOriginalDataUrl!, cleanDataUrl: item.cleanDataUrl || item.dataUrl, isCleaned: false }
             : p
         )
       );
     } else {
-      // Re-run automatic pencil & scribble cleaner
+      // Restore clean version (either previously cleaned or re-clean)
       try {
-        const src = item.rawOriginalDataUrl || item.dataUrl;
-        const cleaned = await autoCleanStudentScribbles(src);
+        let cleaned = item.cleanDataUrl;
+        if (!cleaned) {
+          const src = item.rawOriginalDataUrl || item.dataUrl;
+          cleaned = await autoCleanStudentScribbles(src);
+        }
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
-              ? { ...p, dataUrl: cleaned, rawOriginalDataUrl: src, isCleaned: true }
+              ? { ...p, dataUrl: cleaned!, cleanDataUrl: cleaned!, isCleaned: true }
               : p
           )
         );

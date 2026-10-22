@@ -156,4 +156,29 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     expect(data[pencilIdx + 1]).toBe(255);
     expect(data[pencilIdx + 2]).toBe(255);
   });
+
+  it('5. buildHybridCleanSvg fonksiyonu kurşun kalem yazılarını temizlenmiş, şıkları ve orijinal görseli kusursuz oluşturmalıdır', async () => {
+    const { buildHybridCleanSvg } = await import('../src/services/imageUtils');
+
+    const svg = buildHybridCleanSvg({
+      questionNumber: '2.',
+      headerText: 'Bir çiçekçi elindeki 96 adet gülün tamamını her birinde eşit sayıda gül olacak şekilde vazolara koyacaktır.',
+      stemText: 'Çiçekçinin 20 tane vazosu olup bir vazoya mümkün olan en az sayıda gül koymuştur. Buna göre çiçekçinin kullanmadığı vazo sayısı kaçtır?',
+      choices: ['A) 2', 'B) 4', 'C) 6', 'D) 8'],
+      illustrationDataUrl: 'data:image/jpeg;base64,mockFlowerData',
+      illustrationHeight: 200,
+    });
+
+    expect(svg).toContain('<svg');
+    expect(svg).toContain('Bir çiçekçi elindeki 96 adet gülün tamamını');
+    expect(svg).toContain('Çiçekçinin 20 tane vazosu olup');
+    // Ensure choices prefix 'A) A)' is not duplicated
+    expect(svg).not.toContain('A) A)');
+    expect(svg).toContain('A) <tspan font-weight="normal" fill="#334155">2</tspan>');
+    expect(svg).toContain('B) <tspan font-weight="normal" fill="#334155">4</tspan>');
+    expect(svg).toContain('C) <tspan font-weight="normal" fill="#334155">6</tspan>');
+    expect(svg).toContain('D) <tspan font-weight="normal" fill="#334155">8</tspan>');
+    // Ensure authentic illustration image is embedded
+    expect(svg).toContain('href="data:image/jpeg;base64,mockFlowerData"');
+  });
 });

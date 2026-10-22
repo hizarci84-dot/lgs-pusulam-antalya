@@ -1,6 +1,7 @@
 import { getTopicsBySubject, SUBJECT_MAP } from '../data/curriculum';
 import { SubjectId } from '../types/models';
 import {
+  applyDocumentWhiteningFilter,
   buildHybridCleanSvg,
   cropRotateAndCleanQuestion,
   extractIllustrationSnippet,
@@ -16,15 +17,15 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 
 export const CANDIDATE_MODELS = [
-  'gemini-3.5-flash',
-  'gemini-3.6-flash',
   'gemini-3.5-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-3.1-flash-lite',
   'gemini-3.8-flash',
-  'gemini-3-flash-preview',
-  'gemini-flash-latest',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
 ];
 
 export function getStoredGeminiApiKey(): string {
@@ -61,9 +62,13 @@ export function getStoredGeminiModel(): string {
       saved !== 'gemini-3-flash-preview' &&
       !saved.includes('1.5') &&
       !saved.includes('2.0') &&
-      !saved.includes('2.5') &&
-      !saved.includes('flash-latest')
+      !saved.includes('2.5')
     ) {
+      // Auto-migrate if the user previously had gemini-3.5-flash or gemini-3.6-flash which exhausted free tier quota
+      if (saved === 'gemini-3.5-flash' || saved === 'gemini-3.6-flash' || saved === 'gemini-flash-latest') {
+        saveStoredGeminiModel(DEFAULT_MODEL);
+        return DEFAULT_MODEL;
+      }
       return saved;
     }
     return DEFAULT_MODEL;
@@ -103,7 +108,6 @@ export async function testGeminiApiKey(
         generationConfig: {
           temperature: 0.1,
           maxOutputTokens: 20,
-          thinkingConfig: { thinkingBudget: 0 },
         },
       }),
     });
@@ -235,7 +239,6 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
             generationConfig: {
               temperature: 0.1,
               responseMimeType: 'application/json',
-              thinkingConfig: { thinkingBudget: 0 },
             },
           }),
         });
@@ -411,7 +414,6 @@ Eğer soru görseli okunamıyorsa:
             generationConfig: {
               temperature: 0.2,
               responseMimeType: 'application/json',
-              thinkingConfig: { thinkingBudget: 0 },
             },
           }),
         });
@@ -529,10 +531,18 @@ export async function cleanQuestionImageWithAi(dataUrl: string): Promise<CleanIm
   const geminiKey = getStoredGeminiApiKey();
 
   if (!geminiKey || !geminiKey.trim()) {
-    return {
-      success: false,
-      errorMessage: 'Google Gemini API anahtarı tanımlanmamış.',
-    };
+    try {
+      const localClean = await applyDocumentWhiteningFilter(dataUrl);
+      return {
+        success: true,
+        cleanedDataUrl: localClean,
+      };
+    } catch {
+      return {
+        success: false,
+        errorMessage: 'Google Gemini API anahtarı tanımlanmamış.',
+      };
+    }
   }
 
   try {
@@ -543,15 +553,25 @@ export async function cleanQuestionImageWithAi(dataUrl: string): Promise<CleanIm
         cleanedDataUrl: res.cleanDataUrl,
       };
     }
+    // Fallback to local whitening filter
+    const localClean = await applyDocumentWhiteningFilter(dataUrl);
     return {
-      success: false,
-      errorMessage: res.errorMessage || 'Yapay zekâ yanıt verdi ancak temiz görsel üretemedi.',
+      success: true,
+      cleanedDataUrl: localClean,
     };
   } catch (err: any) {
-    return {
-      success: false,
-      errorMessage: `İşlem hatası: ${err?.message || 'Bilinmeyen hata'}`,
-    };
+    try {
+      const localClean = await applyDocumentWhiteningFilter(dataUrl);
+      return {
+        success: true,
+        cleanedDataUrl: localClean,
+      };
+    } catch {
+      return {
+        success: false,
+        errorMessage: `İşlem hatası: ${err?.message || 'Bilinmeyen hata'}`,
+      };
+    }
   }
 }
 
@@ -710,7 +730,6 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
             generationConfig: {
               responseMimeType: 'application/json',
               temperature: 0.1,
-              thinkingConfig: { thinkingBudget: 0 },
             },
           }),
         });
@@ -734,12 +753,23 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
     }
 
     if (!parsed) {
-      return {
-        success: false,
-        cleanDataUrl: photoDataUrl,
-        rawDataUrl: photoDataUrl,
-        errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
-      };
+      try {
+        const localClean = await applyDocumentWhiteningFilter(photoDataUrl);
+        return {
+          success: true,
+          cleanDataUrl: localClean,
+          rawDataUrl: photoDataUrl,
+          isFaithfulCleaned: true,
+          errorMessage: `Yapay zekâ yanıt veremedi (${lastError}), yerel filtre ile temizlendi.`,
+        };
+      } catch {
+        return {
+          success: false,
+          cleanDataUrl: photoDataUrl,
+          rawDataUrl: photoDataUrl,
+          errorMessage: `Yapay zekâ yanıt veremedi: ${lastError}`,
+        };
+      }
     }
 
     // 1. Crop & Straighten the original camera photo to upright question
@@ -774,9 +804,11 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
     try {
       let illustrationSnippetUrl: string | null = null;
       if (Array.isArray(parsed.illustration_box_2d) && parsed.illustration_box_2d.length === 4) {
+        // Extract illustration snippet directly from photoDataUrl with rotationNeeded so coordinates match 100%
         illustrationSnippetUrl = await extractIllustrationSnippet(
-          croppedRawDataUrl,
-          parsed.illustration_box_2d as [number, number, number, number]
+          photoDataUrl,
+          parsed.illustration_box_2d as [number, number, number, number],
+          parsed.rotation_needed || 0
         );
       }
 
