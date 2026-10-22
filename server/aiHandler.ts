@@ -306,6 +306,11 @@ export interface AICleanQuestionResponse {
   success: boolean;
   question_box_2d?: [number, number, number, number];
   rotation_needed?: number;
+  handwritten_marks?: Array<{
+    box_2d: [number, number, number, number];
+    type: 'safe' | 'recoverable' | 'high_risk';
+    description?: string;
+  }>;
   handwritten_marks_boxes?: Array<[number, number, number, number]>;
   overlap_warning?: boolean;
   overlap_message?: string;
@@ -343,20 +348,32 @@ Bu soru fotoğrafını incele:
    - Soru numarası, soru kökü, matematiksel formüller/ifadeler, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
    - Önceki/sonraki soruları, masa, halı, parmak ve sayfa dışı kenar boşluklarını hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "handwritten_marks_boxes": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri veya karalamalarının [ymin, xmin, ymax, xmax] kutuları dizisi (0-1000 normalize ölçekte).
-   - DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
-4. "overlap_warning": Eğer öğrencinin karalaması doğrudan basılı bir matematik formülü, rakam veya şekil çizgisinin üzerine binmişse ve silinmesi basılı bilgiyi kaybettirecekse true, değilse false.
-5. "overlap_message": Eğer overlap_warning true ise kullanıcıya açıklama (örn: 'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.'), değilse ''.
-6. "question_number": Soru numarası (örn: "2." veya "3.")
-7. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
-8. "detectedTopicName": MEB müfredatındaki konu adı
-9. "detectedSubtopicName": MEB alt kazanım adı
-10. "confidence": Güven puanı (0-100)
+3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X işaretleri veya karalamalarının listesi.
+   Her bir karalama için:
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte).
+   - "type":
+       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
+       * "recoverable": Şık daireleme, alt çizgi, şıkların üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
+       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
+   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çapraz çizgi").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+4. "question_number": Soru numarası (örn: "2." veya "3.")
+5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+6. "detectedTopicName": MEB müfredatındaki konu adı
+7. "detectedSubtopicName": MEB alt kazanım adı
+8. "confidence": Güven puanı (0-100)
 
 Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 {
   "question_box_2d": [ymin, xmin, ymax, xmax],
   "rotation_needed": 0 | 90 | 180 | 270,
+  "handwritten_marks": [
+    {
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "type": "safe" | "recoverable" | "high_risk",
+      "description": "string"
+    }
+  ],
   "handwritten_marks_boxes": [[ymin, xmin, ymax, xmax]],
   "overlap_warning": false,
   "overlap_message": "",
@@ -420,6 +437,9 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
           success: true,
           question_box_2d: parsed.question_box_2d,
           rotation_needed: parsed.rotation_needed || 0,
+          handwritten_marks: Array.isArray(parsed.handwritten_marks)
+            ? parsed.handwritten_marks
+            : [],
           handwritten_marks_boxes: Array.isArray(parsed.handwritten_marks_boxes)
             ? parsed.handwritten_marks_boxes
             : [],

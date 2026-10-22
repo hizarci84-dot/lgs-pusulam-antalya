@@ -23,6 +23,7 @@ import {
   getTopicsBySubject,
 } from '../data/curriculum';
 import {
+  CleanupStatus,
   applyCropAndRotation,
   applyDocumentWhiteningFilter,
   autoCleanStudentScribbles,
@@ -69,6 +70,10 @@ interface StagedQuestionItem {
   rawOriginalDataUrl?: string;
   originalUploadedUrl?: string;
   isCleaned?: boolean;
+  cleanupStatus?: CleanupStatus;
+  statusMessage?: string;
+  cleanedMarkCount?: number;
+  preservedRiskMarkCount?: number;
   overlapWarning?: boolean;
   overlapMessage?: string;
   mimeType: string;
@@ -125,6 +130,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
     rawOriginalDataUrl?: string;
     originalUploadedUrl?: string;
     isCleaned?: boolean;
+    cleanupStatus?: CleanupStatus;
+    statusMessage?: string;
+    cleanedMarkCount?: number;
+    preservedRiskMarkCount?: number;
     overlapWarning?: boolean;
     overlapMessage?: string;
     width: number;
@@ -518,6 +527,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       let finalDataUrl = rawDataUrl;
       let croppedRawDataUrl = rawDataUrl;
       let isCleaned = false;
+      let cleanupStatus: CleanupStatus = 'unchanged';
+      let statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
+      let cleanedMarkCount = 0;
+      let preservedRiskMarkCount = 0;
       let detectedSubj = batchSubjectId;
       let detectedTopId = '';
       let detectedTopName = '';
@@ -533,7 +546,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           if (aiRes.success && aiRes.cleanDataUrl) {
             finalDataUrl = aiRes.cleanDataUrl;
             croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
-            isCleaned = true;
+            cleanupStatus = aiRes.cleanupStatus;
+            statusMessage = aiRes.statusMessage;
+            cleanedMarkCount = aiRes.cleanedMarkCount || 0;
+            preservedRiskMarkCount = aiRes.preservedRiskMarkCount || 0;
+            isCleaned = aiRes.cleanupStatus === 'success' || aiRes.cleanupStatus === 'partial';
             overlapWarn = Boolean(aiRes.overlapWarning);
             overlapMsg = aiRes.overlapMessage || '';
             if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
@@ -558,6 +575,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         rawOriginalDataUrl: croppedRawDataUrl,
         originalUploadedUrl: rawDataUrl,
         isCleaned,
+        cleanupStatus,
+        statusMessage,
+        cleanedMarkCount,
+        preservedRiskMarkCount,
         overlapWarning: overlapWarn,
         overlapMessage: overlapMsg,
         width: canvas.width,
@@ -589,7 +610,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           dataUrl: aiRes.cleanDataUrl,
           cleanDataUrl: aiRes.cleanDataUrl,
           rawOriginalDataUrl: aiRes.rawDataUrl || capturedPreview.rawOriginalDataUrl || src,
-          isCleaned: true,
+          isCleaned: aiRes.cleanupStatus === 'success' || aiRes.cleanupStatus === 'partial',
+          cleanupStatus: aiRes.cleanupStatus,
+          statusMessage: aiRes.statusMessage,
+          cleanedMarkCount: aiRes.cleanedMarkCount,
+          preservedRiskMarkCount: aiRes.preservedRiskMarkCount,
           overlapWarning: aiRes.overlapWarning,
           overlapMessage: aiRes.overlapMessage,
           subjectId: aiRes.subjectId || capturedPreview.subjectId,
@@ -632,7 +657,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                   dataUrl: res.cleanDataUrl,
                   cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: res.rawDataUrl || p.rawOriginalDataUrl || p.dataUrl,
-                  isCleaned: true,
+                  isCleaned: res.cleanupStatus === 'success' || res.cleanupStatus === 'partial',
+                  cleanupStatus: res.cleanupStatus,
+                  statusMessage: res.statusMessage,
+                  cleanedMarkCount: res.cleanedMarkCount,
+                  preservedRiskMarkCount: res.preservedRiskMarkCount,
                   overlapWarning: res.overlapWarning,
                   overlapMessage: res.overlapMessage,
                   subjectId: res.subjectId || p.subjectId,
@@ -742,6 +771,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
       originalUploadedUrl: capturedPreview.originalUploadedUrl || capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
       isCleaned: Boolean(capturedPreview.isCleaned),
+      cleanupStatus: capturedPreview.cleanupStatus,
+      statusMessage: capturedPreview.statusMessage,
+      cleanedMarkCount: capturedPreview.cleanedMarkCount,
+      preservedRiskMarkCount: capturedPreview.preservedRiskMarkCount,
       overlapWarning: capturedPreview.overlapWarning,
       overlapMessage: capturedPreview.overlapMessage,
       mimeType: 'image/jpeg',
@@ -784,6 +817,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         let finalDataUrl = compressed.dataUrl;
         let rawDataUrl = compressed.dataUrl;
         let isCleaned = false;
+        let cleanupStatus: CleanupStatus = 'unchanged';
+        let statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
+        let cleanedMarkCount = 0;
+        let preservedRiskMarkCount = 0;
         let detectedSubj = batchSubjectId;
         let detectedTopId = '';
         let detectedTopName = '';
@@ -798,7 +835,11 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             if (aiRes.success && aiRes.cleanDataUrl) {
               finalDataUrl = aiRes.cleanDataUrl;
               rawDataUrl = aiRes.rawDataUrl || compressed.dataUrl;
-              isCleaned = true;
+              cleanupStatus = aiRes.cleanupStatus;
+              statusMessage = aiRes.statusMessage;
+              cleanedMarkCount = aiRes.cleanedMarkCount || 0;
+              preservedRiskMarkCount = aiRes.preservedRiskMarkCount || 0;
+              isCleaned = aiRes.cleanupStatus === 'success' || aiRes.cleanupStatus === 'partial';
               overlapWarn = Boolean(aiRes.overlapWarning);
               overlapMsg = aiRes.overlapMessage || '';
               if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
@@ -830,6 +871,10 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           rawOriginalDataUrl: rawDataUrl,
           originalUploadedUrl: compressed.dataUrl,
           isCleaned,
+          cleanupStatus,
+          statusMessage,
+          cleanedMarkCount,
+          preservedRiskMarkCount,
           overlapWarning: overlapWarn,
           overlapMessage: overlapMsg,
           mimeType: compressed.mimeType,
@@ -1160,10 +1205,19 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         <span className="text-turquoise-400 font-bold text-xs flex items-center justify-center gap-1.5">
                           <Check className="w-4 h-4" /> Sadece Çerçeve İçindeki Soru Kırpıldı!
                         </span>
-                        {capturedPreview.isCleaned ? (
+                        {capturedPreview.cleanupStatus === 'partial' ? (
+                          <p className="text-[11px] text-amber-300 font-bold flex items-center justify-center gap-1 mt-0.5">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                            ⚠️ Kısmi Temizleme: Güvenli karalamalar silindi; basılı formül/metin korundu.
+                          </p>
+                        ) : capturedPreview.cleanupStatus === 'manual_needed' ? (
+                          <p className="text-[11px] text-orange-300 font-bold flex items-center justify-center gap-1 mt-0.5">
+                            🔍 Manuel Kontrol Gerekli: Karalamalar basılı soruyla yoğun çakıştığı için silinmedi. Daksil ile silebilirsiniz.
+                          </p>
+                        ) : capturedPreview.cleanupStatus === 'success' || capturedPreview.isCleaned ? (
                           <p className="text-[11px] text-emerald-300 font-bold flex items-center justify-center gap-1 mt-0.5">
                             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-                            Kurşun kalem karalamaları ve işaretler yapay zekâ ile otomatik temizlendi.
+                            {capturedPreview.statusMessage || 'Kurşun kalem karalamaları ve işaretler yapay zekâ ile otomatik temizlendi.'}
                           </p>
                         ) : (
                           <p className="text-[11px] text-slate-300">
@@ -1181,15 +1235,29 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         )}
                       </div>
 
-                      <div className="max-h-[46vh] max-w-full overflow-hidden rounded-xl border border-slate-700 bg-black flex flex-col items-center justify-center p-1">
+                      <div className="relative max-h-[46vh] max-w-full overflow-hidden rounded-xl border border-slate-700 bg-black flex flex-col items-center justify-center p-1">
                         <img
                           src={capturedPreview.dataUrl}
                           alt="Kırpılan Soru"
                           className="max-h-[44vh] max-w-full w-auto object-contain rounded-lg"
                         />
-                        {capturedPreview.overlapWarning && (
+                        {capturedPreview.cleanupStatus === 'partial' ? (
+                          <span className="absolute top-2 right-2 bg-amber-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
+                            ⚠️ KISMİ TEMİZ
+                          </span>
+                        ) : capturedPreview.cleanupStatus === 'manual_needed' ? (
+                          <span className="absolute top-2 right-2 bg-orange-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
+                            🔍 MANUEL KONTROL
+                          </span>
+                        ) : (capturedPreview.cleanupStatus === 'success' || (capturedPreview.isCleaned && !capturedPreview.overlapWarning)) ? (
+                          <span className="absolute top-2 right-2 bg-emerald-600/90 text-white text-[10px] font-black px-2 py-0.5 rounded-md shadow-md flex items-center gap-1">
+                            <Sparkles className="w-3 h-3" /> TEMİZLENDİ
+                          </span>
+                        ) : null}
+
+                        {(capturedPreview.overlapWarning || capturedPreview.cleanupStatus === 'partial') && (
                           <div className="mt-2 bg-amber-950/80 border border-amber-500/50 text-amber-200 text-[11px] px-3 py-1.5 rounded-xl max-w-md text-center">
-                            ⚠️ {capturedPreview.overlapMessage || 'Karalama basılı metin veya şeklin üzerine geldiği için orijinal korundu.'}
+                            ⚠️ {capturedPreview.overlapMessage || 'Güvenli karalamalar temizlendi. Basılı formül veya yazı üzerindeki kısımlar soruyu bozmamak için korundu. Kalan kısımları Daksil ile silebilirsiniz.'}
                           </div>
                         )}
                       </div>
@@ -1257,6 +1325,33 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         >
                           <Crop className="w-3.5 h-3.5 text-turquoise-400" />
                           <span>✂️ Kırpmayı Ayarla</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveDaksilItem({
+                              tempId: 'preview-daksil',
+                              dataUrl: capturedPreview.dataUrl,
+                              rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl,
+                              cleanDataUrl: capturedPreview.cleanDataUrl,
+                              mimeType: 'image/jpeg',
+                              width: capturedPreview.width,
+                              height: capturedPreview.height,
+                              subjectId: capturedPreview.subjectId || batchSubjectId,
+                              status: batchStatus,
+                              questionNumber: '',
+                              topicId: capturedPreview.topicId || '',
+                              subtopicName: capturedPreview.subtopicName || '',
+                              errorReason: '',
+                              studentNote: '',
+                            });
+                          }}
+                          className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-violet-300 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-slate-600 transition"
+                          title="İnatçı karalamaları veya işaretli şıkları daksil fırçasıyla elle temizleyin"
+                        >
+                          <Eraser className="w-3.5 h-3.5 text-violet-400" />
+                          <span>🧼 Daksil / Elle Temizle</span>
                         </button>
 
                         {capturedPreview.rawOriginalDataUrl && (
@@ -1508,15 +1603,23 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               alt={`Soru ${idx + 1}`}
                               className="w-full h-24 object-contain bg-white rounded-lg border border-slate-200"
                             />
-                            {item.isCleaned && (
+                            {item.cleanupStatus === 'partial' ? (
+                              <span className="absolute top-1 right-1 bg-amber-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                                ⚠️ KISMİ
+                              </span>
+                            ) : item.cleanupStatus === 'manual_needed' ? (
+                              <span className="absolute top-1 right-1 bg-orange-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
+                                🔍 MANUEL
+                              </span>
+                            ) : (item.cleanupStatus === 'success' || (item.isCleaned && !item.overlapWarning)) ? (
                               <span className="absolute top-1 right-1 bg-emerald-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs flex items-center gap-0.5">
                                 <Sparkles className="w-2.5 h-2.5" /> TEMİZ
                               </span>
-                            )}
+                            ) : null}
                           </div>
-                          {item.overlapWarning && (
+                          {(item.overlapWarning || item.cleanupStatus === 'partial') && (
                             <div className="mt-1 text-[9px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 text-center leading-tight">
-                              ⚠️ {item.overlapMessage || 'Karalama basılı metin üzerinde olduğundan orijinal korundu.'}
+                              ⚠️ {item.overlapMessage || 'Güvenli karalamalar temizlendi; basılı formül veya yazı üzerindeki alanlar korundu.'}
                             </div>
                           )}
 
@@ -1929,18 +2032,42 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         </div>
       )}
 
-      {/* Daksil & Karalama Silici Modal for staged items */}
+      {/* Daksil & Karalama Silici Modal for staged items and camera preview */}
       {activeDaksilItem && (
         <ImageDaksilModal
           imageUrl={activeDaksilItem.dataUrl}
           title="Soru Karalama ve Şık Temizleme (Daksil)"
           onClose={() => setActiveDaksilItem(null)}
           onSave={(cleanedUrl) => {
-            setStagedItems((prev) =>
-              prev.map((p) =>
-                p.tempId === activeDaksilItem.tempId ? { ...p, dataUrl: cleanedUrl } : p
-              )
-            );
+            if (activeDaksilItem.tempId === 'preview-daksil') {
+              if (capturedPreview) {
+                setCapturedPreview({
+                  ...capturedPreview,
+                  dataUrl: cleanedUrl,
+                  cleanDataUrl: cleanedUrl,
+                  isCleaned: true,
+                  cleanupStatus: 'success',
+                  statusMessage: '✨ Karalamalar daksil aracıyla elle temizlendi.',
+                  overlapWarning: false,
+                });
+              }
+            } else {
+              setStagedItems((prev) =>
+                prev.map((p) =>
+                  p.tempId === activeDaksilItem.tempId
+                    ? {
+                        ...p,
+                        dataUrl: cleanedUrl,
+                        cleanDataUrl: cleanedUrl,
+                        isCleaned: true,
+                        cleanupStatus: 'success',
+                        statusMessage: '✨ Karalamalar daksil aracıyla elle temizlendi.',
+                        overlapWarning: false,
+                      }
+                    : p
+                )
+              );
+            }
             setActiveDaksilItem(null);
           }}
         />

@@ -248,17 +248,18 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     const normalCheck = validateCleanedImageQuality(normalPixels, width, height);
     expect(normalCheck.passed).toBe(true);
 
-    // 3. Overlap warning check: karalama basılı yazının üzerine geldiğinde orijinal korunmalı
+    // 3. Overlap warning check: karalama basılı yazının üzerine geldiğinde tüm işlem reddedilmemeli; kısmi temizleme (partial) olarak onaylanmalıdır
     const overlapCheck = validateCleanedImageQuality(
       normalPixels,
       width,
       height,
       true,
-      'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.'
+      'Basılı yazı veya şekille yoğun çakışan alanlar soruyu bozmamak için korundu.'
     );
-    expect(overlapCheck.passed).toBe(false);
+    expect(overlapCheck.passed).toBe(true);
+    expect(overlapCheck.status).toBe('partial');
     expect(overlapCheck.isOverlapRisk).toBe(true);
-    expect(overlapCheck.reason).toContain('orijinal görüntüyü koruduk');
+    expect(overlapCheck.reason).toContain('korundu');
   });
 
   it('8. transformBoxToRotatedCrop: Koordinat dönüşümünü ve rotasyonları doğru hesaplamalıdır', async () => {
@@ -283,5 +284,52 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     // Rotated 90 deg clockwise -> should move to top-right: y: [100, 200], x: [1000-200, 1000-100] = [800, 900]
     const res4 = transformBoxToRotatedCrop([100, 100, 200, 200], [0, 0, 1000, 1000], 90);
     expect(res4).toEqual([100, 800, 200, 900]);
+  });
+
+  it('9. 3-Kademeli Bölge Mantığı (Safe, Recoverable, High-Risk): Güvenli alanları silmeli, yüksek riskli matematiksel formülleri korumalı ve kısmi başarı bildirmelidir', async () => {
+    const { inpaintHandwritingRegions } = await import('../src/services/imageUtils');
+
+    const width = 100;
+    const height = 100;
+    const pixels = new Uint8ClampedArray(width * height * 4);
+
+    // Light paper background
+    for (let i = 0; i < pixels.length; i += 4) {
+      pixels[i] = 240;
+      pixels[i + 1] = 238;
+      pixels[i + 2] = 235;
+      pixels[i + 3] = 255;
+    }
+
+    // Safe region at (20, 20): margin scribble (pencil: 140, 140, 140)
+    const safeScribbleIdx = (20 * width + 20) * 4;
+    pixels[safeScribbleIdx] = 140;
+    pixels[safeScribbleIdx + 1] = 140;
+    pixels[safeScribbleIdx + 2] = 140;
+
+    // High-risk region at (70, 70): student heavily scribbled over a complex formula
+    // We want the formula pixels (e.g. dark formula symbol) to be PRESERVED, not corrupted
+    const highRiskFormulaIdx = (70 * width + 70) * 4;
+    pixels[highRiskFormulaIdx] = 25;
+    pixels[highRiskFormulaIdx + 1] = 25;
+    pixels[highRiskFormulaIdx + 2] = 25;
+
+    const boxes = [
+      { ymin: 100, xmin: 100, ymax: 300, xmax: 300, type: 'safe' as const, description: 'Kenar karalaması' },
+      { ymin: 600, xmin: 600, ymax: 800, xmax: 800, type: 'high_risk' as const, description: 'Karmaşık formül üzeri karalama' },
+    ];
+
+    const result = inpaintHandwritingRegions(pixels, width, height, boxes);
+
+    // 1. Safe scribble is cleaned
+    expect(result.cleanedBoxesCount).toBeGreaterThanOrEqual(1);
+    expect(result.modifiedPixelCount).toBeGreaterThan(0);
+    expect(pixels[safeScribbleIdx]).toBeGreaterThanOrEqual(220);
+
+    // 2. High-risk box is skipped/preserved, NOT corrupted or deleted!
+    expect(result.preservedHighRiskBoxesCount).toBe(1);
+    expect(pixels[highRiskFormulaIdx]).toBe(25);
+    expect(pixels[highRiskFormulaIdx + 1]).toBe(25);
+    expect(pixels[highRiskFormulaIdx + 2]).toBe(25);
   });
 });

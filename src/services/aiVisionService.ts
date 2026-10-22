@@ -3,8 +3,10 @@ import { SubjectId } from '../types/models';
 import {
   applyDocumentWhiteningFilter,
   buildHybridCleanSvg,
+  CleanupStatus,
   cropRotateAndCleanQuestion,
   extractIllustrationSnippet,
+  InpaintRegionBox,
   inpaintQuestionDataUrl,
   transformBoxToRotatedCrop,
 } from './imageUtils';
@@ -673,6 +675,10 @@ export interface AiAutoCleanAndCropResult {
   cleanDataUrl: string;
   rawDataUrl: string;
   originalUploadedUrl?: string;
+  cleanupStatus: CleanupStatus;
+  statusMessage: string;
+  cleanedMarkCount?: number;
+  preservedRiskMarkCount?: number;
   subjectId?: SubjectId;
   topicId?: string;
   topicName?: string;
@@ -690,8 +696,10 @@ export interface AiAutoCleanAndCropResult {
  * 1. Analyzes the question photo with multimodal AI (Gemini Vision with server / client fallback).
  * 2. Establishes immutable original image states (original upload -> oriented crop -> mark mask -> clean inpaint).
  * 3. Identifies precise question bounding box [ymin, xmin, ymax, xmax] and orientation rotation.
- * 4. Identifies student handwriting marks, calculations, and circled choices while strictly protecting
- *    printed typography, mathematical formulas (roots, exponents, fractions), diagrams, and shaded regions.
+ * 4. Identifies student handwriting marks into 3 categories:
+ *    - 'safe': separated in margins/whitespace -> cleaned automatically.
+ *    - 'recoverable': circles around choices, underlines, diagonal marks -> pencil is removed, printed text is protected!
+ *    - 'high_risk': heavily obscured printed math -> preserved locally to protect mathematical accuracy.
  * 5. Synthesizes surrounding paper texture to inpaint marked regions, leaving 100% of unmasked pixels unchanged.
  * 6. Matches official MEB 8th grade curriculum Subject, Topic, and Subtopic.
  */
@@ -708,6 +716,8 @@ export async function processQuestionPhotoWithAi(
       cleanDataUrl: photoDataUrl,
       rawDataUrl: photoDataUrl,
       originalUploadedUrl: photoDataUrl,
+      cleanupStatus: 'unchanged',
+      statusMessage: 'Gemini API anahtarı bulunamadı.',
       errorMessage: 'Gemini API anahtarı bulunamadı.',
     };
   }
@@ -724,20 +734,32 @@ Bu soru fotoğrafını incele:
    - Soru numarası, soru kökü, matematiksel formüller/ifadeler, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
    - Önceki/sonraki soruları, masa, halı, parmak ve sayfa dışı kenar boşluklarını hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "handwritten_marks_boxes": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri veya karalamalarının [ymin, xmin, ymax, xmax] kutuları dizisi (0-1000 normalize ölçekte).
-   - DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
-4. "overlap_warning": Eğer öğrencinin karalaması doğrudan basılı bir matematik formülü, rakam veya şekil çizgisinin üzerine binmişse ve silinmesi basılı bilgiyi kaybettirecekse true, değilse false.
-5. "overlap_message": Eğer overlap_warning true ise kullanıcıya açıklama (örn: 'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.'), değilse ''.
-6. "question_number": Soru numarası (örn: "2." veya "3.")
-7. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
-8. "detectedTopicName": MEB müfredatındaki konu adı
-9. "detectedSubtopicName": MEB alt kazanım adı
-10. "confidence": Güven puanı (0-100)
+3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X işaretleri veya karalamalarının listesi.
+   Her bir karalama için:
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte).
+   - "type":
+       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
+       * "recoverable": Şık daireleme, alt çizgi, şıkların üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
+       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
+   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çapraz çizgi").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+4. "question_number": Soru numarası (örn: "2." veya "3.")
+5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+6. "detectedTopicName": MEB müfredatındaki konu adı
+7. "detectedSubtopicName": MEB alt kazanım adı
+8. "confidence": Güven puanı (0-100)
 
 Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 {
   "question_box_2d": [ymin, xmin, ymax, xmax],
   "rotation_needed": 0 | 90 | 180 | 270,
+  "handwritten_marks": [
+    {
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "type": "safe" | "recoverable" | "high_risk",
+      "description": "string"
+    }
+  ],
   "handwritten_marks_boxes": [[ymin, xmin, ymax, xmax]],
   "overlap_warning": false,
   "overlap_message": "",
@@ -834,6 +856,8 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         cleanDataUrl: photoDataUrl,
         rawDataUrl: photoDataUrl,
         originalUploadedUrl: photoDataUrl,
+        cleanupStatus: 'unchanged',
+        statusMessage: `Yapay zekâ yanıt veremedi (${lastError})`,
         errorMessage: `Yapay zekâ yanıt veremedi (${lastError}). İsterseniz Gemini'den kopyalayıp yeşil 'Panodan Yapıştır' butonunu kullanabilirsiniz.`,
       };
     }
@@ -863,18 +887,27 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
-    // 2. Localized Mask-Controlled Inpainting:
-    // Only pixels inside detected handwriting boxes are inpainted with surrounding paper texture.
-    // 100% of printed text, math notation, formulas, diagrams and colored shapes outside the boxes are bit-for-bit preserved.
+    // 2. Localized Mask-Controlled Inpainting with 3-Tier Regions:
+    // Only pixels inside safe and recoverable marks are inpainted with surrounding paper texture.
+    // 100% of printed text, math notation, formulas, diagrams, and options outside marks are bit-for-bit preserved.
     let cleanDataUrl = croppedRawDataUrl;
     let isCleaned = false;
+    let cleanupStatus: CleanupStatus = 'unchanged';
+    let statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
+    let cleanedMarkCount = 0;
+    let preservedRiskMarkCount = 0;
 
-    const rawBoxes: any[] = Array.isArray(parsed.handwritten_marks_boxes)
-      ? parsed.handwritten_marks_boxes
-      : [];
+    // Prefer handwritten_marks (with 3-tier types: safe, recoverable, high_risk) if present,
+    // fallback to handwritten_marks_boxes
+    const rawMarks: any[] =
+      Array.isArray(parsed.handwritten_marks) && parsed.handwritten_marks.length > 0
+        ? parsed.handwritten_marks
+        : Array.isArray(parsed.handwritten_marks_boxes)
+        ? parsed.handwritten_marks_boxes
+        : [];
 
-    if (rawBoxes.length > 0) {
-      const transformedBoxes: Array<[number, number, number, number]> = [];
+    if (rawMarks.length > 0) {
+      const transformedBoxes: Array<any> = [];
       const qBox: [number, number, number, number] =
         Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4
           ? [
@@ -886,10 +919,20 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
           : [0, 0, 1000, 1000];
       const rot = typeof parsed.rotation_needed === 'number' ? parsed.rotation_needed : 0;
 
-      for (const b of rawBoxes) {
+      for (const m of rawMarks) {
+        let b: any = m;
+        let markType: 'safe' | 'recoverable' | 'high_risk' = 'recoverable';
+        let desc = '';
+
+        if (m && typeof m === 'object' && !Array.isArray(m)) {
+          b = m.box_2d || [m.ymin, m.xmin, m.ymax, m.xmax];
+          markType = m.type || 'recoverable';
+          desc = m.description || '';
+        }
+
         if (Array.isArray(b) && b.length === 4) {
           const tb = transformBoxToRotatedCrop(
-            b as [number, number, number, number],
+            { ymin: b[0], xmin: b[1], ymax: b[2], xmax: b[3], type: markType, description: desc },
             qBox,
             rot
           );
@@ -904,9 +947,17 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
             overlapMessage: parsed.overlap_message,
           });
 
-          if (inpaintRes.success && inpaintRes.qualityCheck.passed) {
+          cleanupStatus = inpaintRes.cleanupStatus;
+          statusMessage = inpaintRes.statusMessage;
+          cleanedMarkCount = inpaintRes.cleanedBoxesCount;
+          preservedRiskMarkCount = inpaintRes.preservedHighRiskBoxesCount;
+
+          if (
+            inpaintRes.success &&
+            (inpaintRes.cleanupStatus === 'success' || inpaintRes.cleanupStatus === 'partial')
+          ) {
             cleanDataUrl = inpaintRes.cleanDataUrl;
-            isCleaned = true;
+            isCleaned = inpaintRes.cleanedPixelCount > 0;
           } else {
             console.warn(
               'Inpainting quality check reason:',
@@ -917,6 +968,8 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         } catch (inpaintErr) {
           console.warn('Inpainting execution error, preserving pristine crop:', inpaintErr);
           cleanDataUrl = croppedRawDataUrl;
+          cleanupStatus = 'manual_needed';
+          statusMessage = 'Görüntü işlenirken bir sorun oluştu; daksil aracıyla elle temizleyebilirsiniz.';
         }
       }
     }
@@ -958,6 +1011,10 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       cleanDataUrl,
       rawDataUrl: croppedRawDataUrl,
       originalUploadedUrl: photoDataUrl,
+      cleanupStatus,
+      statusMessage,
+      cleanedMarkCount,
+      preservedRiskMarkCount,
       subjectId: finalSubject,
       topicId: matchedTopic?.id || '',
       topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
@@ -974,6 +1031,8 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       cleanDataUrl: photoDataUrl,
       rawDataUrl: photoDataUrl,
       originalUploadedUrl: photoDataUrl,
+      cleanupStatus: 'manual_needed',
+      statusMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
       errorMessage: err?.message || 'Yapay zekâ işlemi sırasında hata oluştu.',
     };
   }

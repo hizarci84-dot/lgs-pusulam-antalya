@@ -250,10 +250,15 @@ export interface InpaintRegionBox {
   xmin: number;
   ymax: number;
   xmax: number;
+  type?: 'safe' | 'recoverable' | 'high_risk';
+  description?: string;
 }
+
+export type CleanupStatus = 'success' | 'partial' | 'manual_needed' | 'unchanged';
 
 export interface QualityCheckResult {
   passed: boolean;
+  status?: CleanupStatus;
   reason?: string;
   isOverlapRisk?: boolean;
 }
@@ -261,17 +266,18 @@ export interface QualityCheckResult {
 /**
  * Transforms a bounding box from full-image normalized coordinates (0..1000)
  * into the local coordinate system (0..1000) of a cropped and rotated sub-image.
+ * Preserves region classification (safe, recoverable, high_risk) and description.
  *
- * @param markBox Normalized box [ymin, xmin, ymax, xmax] (0..1000) on original photo
+ * @param markBox Normalized box [ymin, xmin, ymax, xmax] (0..1000) or InpaintRegionBox on original photo
  * @param questionBox Normalized crop box [ymin, xmin, ymax, xmax] (0..1000) on original photo
  * @param rotation Clockwise rotation angle in degrees (0, 90, 180, 270)
- * @returns Transformed box [ymin, xmin, ymax, xmax] (0..1000) or null if box falls completely outside the crop
+ * @returns Transformed box [ymin, xmin, ymax, xmax] (0..1000) with preserved type & description, or null if outside crop
  */
 export function transformBoxToRotatedCrop(
   markBox: [number, number, number, number] | InpaintRegionBox,
   questionBox: [number, number, number, number] = [0, 0, 1000, 1000],
   rotation: number = 0
-): [number, number, number, number] | null {
+): ([number, number, number, number] & { type?: 'safe' | 'recoverable' | 'high_risk'; description?: string }) | null {
   const [qYmin, qXmin, qYmax, qXmax] = questionBox;
   const mYmin = Array.isArray(markBox) ? markBox[0] : markBox.ymin;
   const mXmin = Array.isArray(markBox) ? markBox[1] : markBox.xmin;
@@ -312,23 +318,53 @@ export function transformBoxToRotatedCrop(
     rXmax = cYmax;
   }
 
-  const finalBox: [number, number, number, number] = [
+  const finalBox: [number, number, number, number] & {
+    type?: 'safe' | 'recoverable' | 'high_risk';
+    description?: string;
+  } = [
     Math.max(0, Math.min(1000, Math.round(rYmin * 1000))),
     Math.max(0, Math.min(1000, Math.round(rXmin * 1000))),
     Math.max(0, Math.min(1000, Math.round(rYmax * 1000))),
     Math.max(0, Math.min(1000, Math.round(rXmax * 1000))),
   ];
 
+  if (!Array.isArray(markBox)) {
+    if (markBox.type) finalBox.type = markBox.type;
+    if (markBox.description) finalBox.description = markBox.description;
+  } else if ((markBox as any).type) {
+    finalBox.type = (markBox as any).type;
+    if ((markBox as any).description) finalBox.description = (markBox as any).description;
+  }
+
   if (finalBox[2] <= finalBox[0] || finalBox[3] <= finalBox[1]) return null;
   return finalBox;
 }
 
+export interface InpaintResult {
+  modifiedPixelCount: number;
+  cleanedBoxesCount: number;
+  preservedHighRiskBoxesCount: number;
+}
+
+export interface InpaintQuestionDataUrlResult {
+  success: boolean;
+  cleanDataUrl: string;
+  cleanupStatus: CleanupStatus;
+  statusMessage: string;
+  cleanedPixelCount: number;
+  cleanedBoxesCount: number;
+  preservedHighRiskBoxesCount: number;
+  qualityCheck: QualityCheckResult;
+}
+
 /**
- * Mask-controlled localized inpainting:
- * Targets ONLY the specified bounding boxes [ymin, xmin, ymax, xmax] (0..1000 scale).
- * Pixels outside the approved boxes remain 100% UNCHANGED relative to the oriented crop.
- * Within each box, graphite pencil strokes or pen marks are identified and seamlessly
- * inpainted using surrounding paper texture & lighting, while colored diagrams & printed text are protected.
+ * Mask-controlled localized inpainting with 3-tier region handling:
+ * 1. Safe regions (margin calculations, scratchpad notes): cleaned automatically.
+ * 2. Recoverable overlap regions (choice circles, underlines, cross-out lines):
+ *    pencil strokes are inpainted while protecting intense black printed typography, digits, and fraction bars!
+ * 3. High-risk regions: heavily obscured printed math that cannot be reconstructed reliably is preserved.
+ *
+ * Pixels outside approved boxes remain 100% UNCHANGED relative to the oriented crop.
  */
 export function inpaintHandwritingRegions(
   pixels: Uint8ClampedArray,
@@ -339,14 +375,28 @@ export function inpaintHandwritingRegions(
     protectColoredArtwork?: boolean;
     paperSamplingRadius?: number;
   } = {}
-): { modifiedPixelCount: number } {
-  if (!boxes || boxes.length === 0) return { modifiedPixelCount: 0 };
+): InpaintResult {
+  if (!boxes || boxes.length === 0) {
+    return { modifiedPixelCount: 0, cleanedBoxesCount: 0, preservedHighRiskBoxesCount: 0 };
+  }
   const protectColored = options.protectColoredArtwork !== false;
   const sampleRadius = Math.max(3, options.paperSamplingRadius || 6);
 
   let totalModified = 0;
+  let cleanedBoxes = 0;
+  let preservedHighRisk = 0;
 
   for (const rawBox of boxes) {
+    const boxType: 'safe' | 'recoverable' | 'high_risk' =
+      (!Array.isArray(rawBox) && rawBox.type) || (rawBox as any)?.type || 'recoverable';
+
+    // High-risk overlap: printed math content is heavily obscured and cannot be reconstructed reliably.
+    // Preserve the original details in this region without preventing safe regions from being cleaned!
+    if (boxType === 'high_risk') {
+      preservedHighRisk++;
+      continue;
+    }
+
     const yminNorm = Array.isArray(rawBox) ? rawBox[0] : rawBox.ymin;
     const xminNorm = Array.isArray(rawBox) ? rawBox[1] : rawBox.xmin;
     const ymaxNorm = Array.isArray(rawBox) ? rawBox[2] : rawBox.ymax;
@@ -393,11 +443,18 @@ export function inpaintHandwritingRegions(
     const defaultPaperR = paperCount > 0 ? Math.round(paperRSum / paperCount) : 255;
     const defaultPaperG = paperCount > 0 ? Math.round(paperGSum / paperCount) : 255;
     const defaultPaperB = paperCount > 0 ? Math.round(paperBSum / paperCount) : 255;
+    const paperLum = 0.299 * defaultPaperR + 0.587 * defaultPaperG + 0.114 * defaultPaperB;
+
+    const pencilMaxLum = Math.max(160, paperLum - 12);
+    // In recoverable overlap regions (circles around choices A, B, C, D or underlines),
+    // protect intense black printed typography, digits, minus signs, and fraction bars!
+    const printProtectLum = boxType === 'safe' ? 30 : Math.min(68, paperLum - 110);
 
     // 2. Scan box and identify pencil / scribble pixels
     const boxW = x1 - x0;
     const boxH = y1 - y0;
     const isScribble = new Uint8Array(boxW * boxH);
+    let boxScribbleCount = 0;
 
     for (let by = y0; by < y1; by++) {
       for (let bx = x0; bx < x1; bx++) {
@@ -415,15 +472,25 @@ export function inpaintHandwritingRegions(
           continue;
         }
 
+        // In recoverable overlap regions, protect intense black printed ink
+        if (lum < printProtectLum && chroma <= 18) {
+          continue;
+        }
+
         // Graphite pencil marks have lower luminance than surrounding paper, with neutral chroma
         // Student blue/red pen has high chroma with low/medium lum
-        const isGraphitePencil = lum < 215 && chroma <= 18;
-        const isColoredPen = chroma > 35 && lum < 180;
+        const isGraphitePencil = lum >= printProtectLum && lum <= pencilMaxLum && chroma <= 22;
+        const isColoredPen = chroma > 28 && lum <= pencilMaxLum && lum > 35;
 
         if (isGraphitePencil || isColoredPen) {
           isScribble[(by - y0) * boxW + (bx - x0)] = 1;
+          boxScribbleCount++;
         }
       }
+    }
+
+    if (boxScribbleCount > 0) {
+      cleanedBoxes++;
     }
 
     // 3. Inpaint scribble pixels using local paper texture synthesis
@@ -483,7 +550,11 @@ export function inpaintHandwritingRegions(
     }
   }
 
-  return { modifiedPixelCount: totalModified };
+  return {
+    modifiedPixelCount: totalModified,
+    cleanedBoxesCount: cleanedBoxes,
+    preservedHighRiskBoxesCount: preservedHighRisk,
+  };
 }
 
 /**
@@ -491,6 +562,7 @@ export function inpaintHandwritingRegions(
  * - Not blank, solid white, or pitch black
  * - Resolution and dimensions preserved
  * - Variance check confirms content is present
+ * - Distinguishes between 'success' (clean), 'partial' (some overlap preserved), and 'manual_needed'
  */
 export function validateCleanedImageQuality(
   pixels: Uint8ClampedArray,
@@ -500,16 +572,10 @@ export function validateCleanedImageQuality(
   overlapMessage?: string
 ): QualityCheckResult {
   if (width < 50 || height < 50) {
-    return { passed: false, reason: 'Görüntü boyutları çok küçük veya geçersiz.' };
-  }
-
-  if (overlapWarning) {
     return {
       passed: false,
-      isOverlapRisk: true,
-      reason:
-        overlapMessage ||
-        'Bu karalama basılı yazı veya şeklin üzerine geliyor. Otomatik temizleme soruyu bozabileceği için orijinal görüntüyü koruduk.',
+      status: 'manual_needed',
+      reason: 'Görüntü boyutları çok küçük veya geçersiz.',
     };
   }
 
@@ -532,25 +598,53 @@ export function validateCleanedImageQuality(
 
   // Solid white or washed out (no dark printed ink)
   if (minLum > 240) {
-    return { passed: false, reason: 'Temizleme sonucu görüntü tamamen beyaz veya boş çıktı.' };
+    return {
+      passed: false,
+      status: 'manual_needed',
+      reason: 'Temizleme sonucu görüntü tamamen beyaz veya boş çıktı.',
+    };
   }
 
   // Solid black
   if (maxLum < 30) {
-    return { passed: false, reason: 'Temizleme sonucu görüntü tamamen siyah veya bozuk çıktı.' };
+    return {
+      passed: false,
+      status: 'manual_needed',
+      reason: 'Temizleme sonucu görüntü tamamen siyah veya bozuk çıktı.',
+    };
   }
 
   // Insufficient contrast
   if (maxLum - minLum < 40) {
-    return { passed: false, reason: 'Görüntü kontrastı yetersiz veya bozuk.' };
+    return {
+      passed: false,
+      status: 'manual_needed',
+      reason: 'Görüntü kontrastı yetersiz veya bozuk.',
+    };
   }
 
-  return { passed: true };
+  // If content is intact, check if there was a partial overlap risk
+  if (overlapWarning) {
+    return {
+      passed: true,
+      status: 'partial',
+      isOverlapRisk: true,
+      reason:
+        overlapMessage ||
+        'Basılı yazı veya şekille yoğun çakışan alanlar soruyu bozmamak için korundu.',
+    };
+  }
+
+  return {
+    passed: true,
+    status: 'success',
+  };
 }
 
 /**
  * Applies mask-controlled inpainting onto a cropped image DataURL.
  * Preserves 100% of pixels outside the handwriting boxes.
+ * Accurately categorizes result as 'success', 'partial', 'manual_needed', or 'unchanged'.
  */
 export function inpaintQuestionDataUrl(
   croppedDataUrl: string,
@@ -559,17 +653,18 @@ export function inpaintQuestionDataUrl(
     overlapWarning?: boolean;
     overlapMessage?: string;
   } = {}
-): Promise<{
-  success: boolean;
-  cleanDataUrl: string;
-  qualityCheck: QualityCheckResult;
-}> {
+): Promise<InpaintQuestionDataUrlResult> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined') {
       resolve({
         success: true,
         cleanDataUrl: croppedDataUrl,
-        qualityCheck: { passed: true },
+        cleanupStatus: 'unchanged',
+        statusMessage: 'İşlem tamamlandı.',
+        cleanedPixelCount: 0,
+        cleanedBoxesCount: 0,
+        preservedHighRiskBoxesCount: 0,
+        qualityCheck: { passed: true, status: 'unchanged' },
       });
       return;
     }
@@ -588,7 +683,12 @@ export function inpaintQuestionDataUrl(
           resolve({
             success: false,
             cleanDataUrl: croppedDataUrl,
-            qualityCheck: { passed: false, reason: 'Canvas context alınamadı.' },
+            cleanupStatus: 'manual_needed',
+            statusMessage: 'Canvas context alınamadı.',
+            cleanedPixelCount: 0,
+            cleanedBoxesCount: 0,
+            preservedHighRiskBoxesCount: 0,
+            qualityCheck: { passed: false, status: 'manual_needed', reason: 'Canvas context alınamadı.' },
           });
           return;
         }
@@ -597,14 +697,14 @@ export function inpaintQuestionDataUrl(
         const imgData = ctx.getImageData(0, 0, width, height);
 
         // Perform precision inpainting on the pixel array
-        inpaintHandwritingRegions(imgData.data, width, height, boxes);
+        const inpaintResult = inpaintHandwritingRegions(imgData.data, width, height, boxes);
 
         // Quality check
         const qCheck = validateCleanedImageQuality(
           imgData.data,
           width,
           height,
-          options.overlapWarning,
+          options.overlapWarning || inpaintResult.preservedHighRiskBoxesCount > 0,
           options.overlapMessage
         );
 
@@ -612,6 +712,11 @@ export function inpaintQuestionDataUrl(
           resolve({
             success: false,
             cleanDataUrl: croppedDataUrl,
+            cleanupStatus: 'manual_needed',
+            statusMessage: qCheck.reason || 'Manuel kontrol gerekli: Görüntü doğrulanamadı.',
+            cleanedPixelCount: 0,
+            cleanedBoxesCount: 0,
+            preservedHighRiskBoxesCount: inpaintResult.preservedHighRiskBoxesCount,
             qualityCheck: qCheck,
           });
           return;
@@ -619,16 +724,51 @@ export function inpaintQuestionDataUrl(
 
         ctx.putImageData(imgData, 0, 0);
         const cleanDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+        let cleanupStatus: CleanupStatus = 'success';
+        let statusMessage = '✨ Temizleme Başarılı: Karalamalar temizlendi.';
+
+        if (inpaintResult.modifiedPixelCount > 0 && inpaintResult.preservedHighRiskBoxesCount > 0) {
+          cleanupStatus = 'partial';
+          statusMessage =
+            options.overlapMessage ||
+            '⚠️ Kısmi Temizleme: Güvenli karalamalar temizlendi. Basılı formül/yazı ile yoğun çakışan alan(lar) soruyu bozmamak için korundu.';
+        } else if (inpaintResult.modifiedPixelCount > 0) {
+          cleanupStatus = 'success';
+          statusMessage = '✨ Temizleme Başarılı: Tüm kurşun kalem karalamaları ve işaretler temizlendi.';
+        } else if (inpaintResult.preservedHighRiskBoxesCount > 0) {
+          cleanupStatus = 'manual_needed';
+          statusMessage =
+            '🔍 Manuel Kontrol Gerekli: Karalamalar basılı formül veya şekille yoğun çakıştığı için otomatik silinmedi. Daksil aracıyla elle temizleyebilirsiniz.';
+        } else {
+          cleanupStatus = 'unchanged';
+          statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
+        }
+
         resolve({
           success: true,
-          cleanDataUrl,
-          qualityCheck: { passed: true },
+          cleanDataUrl: inpaintResult.modifiedPixelCount > 0 ? cleanDataUrl : croppedDataUrl,
+          cleanupStatus,
+          statusMessage,
+          cleanedPixelCount: inpaintResult.modifiedPixelCount,
+          cleanedBoxesCount: inpaintResult.cleanedBoxesCount,
+          preservedHighRiskBoxesCount: inpaintResult.preservedHighRiskBoxesCount,
+          qualityCheck: {
+            ...qCheck,
+            status: cleanupStatus,
+            reason: statusMessage,
+          },
         });
       } catch (err: any) {
         resolve({
           success: false,
           cleanDataUrl: croppedDataUrl,
-          qualityCheck: { passed: false, reason: err?.message || 'Bilinmeyen hata' },
+          cleanupStatus: 'manual_needed',
+          statusMessage: 'İnpainting hatası: ' + (err?.message || ''),
+          cleanedPixelCount: 0,
+          cleanedBoxesCount: 0,
+          preservedHighRiskBoxesCount: 0,
+          qualityCheck: { passed: false, status: 'manual_needed', reason: err?.message },
         });
       }
     };
@@ -636,7 +776,12 @@ export function inpaintQuestionDataUrl(
       resolve({
         success: false,
         cleanDataUrl: croppedDataUrl,
-        qualityCheck: { passed: false, reason: 'Görüntü yüklenemedi.' },
+        cleanupStatus: 'manual_needed',
+        statusMessage: 'Görüntü yüklenemedi.',
+        cleanedPixelCount: 0,
+        cleanedBoxesCount: 0,
+        preservedHighRiskBoxesCount: 0,
+        qualityCheck: { passed: false, status: 'manual_needed', reason: 'Görüntü yüklenemedi.' },
       });
     };
     img.src = croppedDataUrl;
