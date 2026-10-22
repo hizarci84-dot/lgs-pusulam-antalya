@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { analyzeQuestionImage, getAIStatus } from './server/aiHandler';
+import { analyzeQuestionImage, cleanQuestionImageServer, getAIStatus } from './server/aiHandler';
 
 function lgsPusulamApiPlugin() {
   const setupMiddleware = (middlewares: any) => {
@@ -30,6 +30,31 @@ function lgsPusulamApiPlugin() {
               success: false,
               providerConfigured: false,
               providerName: 'none',
+              errorMessage: err?.message || 'İstek işlenirken hata oluştu.',
+            })
+          );
+        }
+      });
+    });
+
+    middlewares.use('/api/ai/clean-question', (req: any, res: any, next: any) => {
+      if (req.method !== 'POST') return next();
+      let body = '';
+      req.on('data', (chunk: any) => {
+        body += chunk.toString();
+      });
+      req.on('end', async () => {
+        try {
+          const parsed = JSON.parse(body || '{}');
+          const result = await cleanQuestionImageServer(parsed);
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify(result));
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(
+            JSON.stringify({
+              success: false,
               errorMessage: err?.message || 'İstek işlenirken hata oluştu.',
             })
           );
