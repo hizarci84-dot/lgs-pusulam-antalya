@@ -1,5 +1,6 @@
 import { getTopicsBySubject, SUBJECT_MAP } from '../data/curriculum';
 import { SubjectId } from '../types/models';
+import { cropRotateAndCleanQuestion } from './imageUtils';
 
 const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
 const STORAGE_KEY_MODEL = 'lgs_gemini_model';
@@ -11,12 +12,12 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-3-flash-preview';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export const CANDIDATE_MODELS = [
-  'gemini-3-flash-preview',
-  'gemini-3.5-flash',
   'gemini-3.8-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
   'gemini-flash-latest',
 ];
 
@@ -51,6 +52,7 @@ export function getStoredGeminiModel(): string {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
     if (
       saved &&
+      saved !== 'gemini-3-flash-preview' &&
       !saved.includes('1.5') &&
       !saved.includes('2.0') &&
       !saved.includes('2.5') &&
@@ -607,6 +609,7 @@ export interface AiAutoCleanAndCropResult {
   subtopicName?: string;
   confidence?: number;
   isSvgCleaned?: boolean;
+  isFaithfulCleaned?: boolean;
   errorMessage?: string;
 }
 
@@ -639,31 +642,36 @@ export async function processQuestionPhotoWithAi(
     const mimeMatch = photoDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
-    const prompt = `You are an expert document analysis and question reconstruction AI for Turkish LGS (8th grade) exam preparation.
-Analyze this photograph of a test question.
-Note: The photograph might be captured at an angle or rotated sideways (e.g. 90 degrees landscape). Locate the target question accurately.
+    const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
+Kullanıcının gönderdiği bu soru fotoğrafını analiz et:
 
-1. Detect the EXACT bounding box [ymin, xmin, ymax, xmax] (normalized on 0 to 1000 scale) of the target question:
-   - Top: Starts at the question diagram, question stem, or question number. Exclude any text from previous questions above it.
-   - Bottom: Ends right after choices (A, B, C, D) and bottom publisher footer. Exclude adjacent questions, carpet, desk, hands, or shadows.
-   - Sides: Include the question width cleanly.
-2. Identify the subject (turkce, matematik, fen, inkilap, din, ingilizce), official MEB topicName, subtopicName.
-3. Reconstruct a 100% clean, pristine vector SVG representation of this question:
-   - Dimensions: viewBox="0 0 800 1100", width="800", height="1100", style="background-color:#ffffff;".
-   - Margins: Content width is 700px, x starts at 50 (50px margin left and right).
-   - Text Wrapping: Ensure ALL text lines wrap cleanly within x=50 to x=750 using multi-line <text> or <tspan x="50" dy="1.4em">. NEVER allow any word or sentence to be clipped on the right!
-   - Full question text, Turkish characters (ç, ğ, ı, ö, ş, ü), bold question stem, and choices A, B, C, D on a neat row.
-   - Graphics & Diagrams: Reconstruct all visual diagrams with high fidelity (e.g. calendar headers with spiral holes and dates, geometric parcels with area labels, tables, charts, dimension arrows).
-   - Clean white background (#ffffff). REMOVE ALL student pencil markings, handwriting notes, margin calculations, underlines, circles, and crosses.
+1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] sınır koordinatlarını (0-1000 normalize ölçekte) belirle.
+   - Soru numarası, soru kökü, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
+   - Önceki/sonraki soruları, masa, halı, parmak ve kenar boşluklarını hariç tut.
+2. "rotation_needed": Sorunun düz (okunabilir) hale gelmesi için saat yönünde yapılması gereken dönme açısı (0, 90, 180 veya 270). Fotoğraf zaten düz ise 0 ver.
+3. "has_complex_illustrations": Soruda çiçek, vazo, deney düzeneği, fotoğraf, harita veya renkli çizim gibi görsel içerik var mı? (true / false)
+4. "pencil_markings": Öğrencinin soru üzerine kurşun kalemle yaptığı hesaplamalar, karalamalar, alt çizimler veya şık işaretlemelerinin kutuları:
+   [{"box_2d": [ymin, xmin, ymax, xmax], "type": "calculation" | "circle" | "underline" | "margin_note"}]
+5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
+6. "detectedTopicName": MEB müfredatındaki konu adı
+7. "detectedSubtopicName": MEB alt kazanım adı
+8. "confidence": Güven puanı (0-100)
 
-Output JSON only in this schema:
+Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 {
   "question_box_2d": [ymin, xmin, ymax, xmax],
+  "rotation_needed": 0 | 90 | 180 | 270,
+  "has_complex_illustrations": boolean,
+  "pencil_markings": [
+    {
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "type": "calculation" | "circle" | "underline" | "margin_note"
+    }
+  ],
   "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce",
   "detectedTopicName": string,
   "detectedSubtopicName": string,
-  "confidence": number,
-  "cleanSvg": string
+  "confidence": number
 }`;
 
     const modelsToTry = [
@@ -729,36 +737,29 @@ Output JSON only in this schema:
       };
     }
 
-    const qBox = parsed.question_box_2d;
-
-    // Crop camera photo according to AI bounding box
+    // High-Fidelity Auto-Crop, Auto-Straighten & Faithful Pencil Cleaning
+    // Preserves 100% of the original illustrations, colors, shapes and text
+    let cleanDataUrl = photoDataUrl;
     let croppedRawDataUrl = photoDataUrl;
-    if (Array.isArray(qBox) && qBox.length === 4) {
-      try {
-        croppedRawDataUrl = await cropImageDataUrlByBox(photoDataUrl, qBox as [number, number, number, number]);
-      } catch (cropErr) {
-        console.warn('AI Crop error:', cropErr);
-      }
-    }
 
-    // Process clean SVG
-    let cleanDataUrl = croppedRawDataUrl;
-    let isSvgCleaned = false;
-    if (parsed.cleanSvg && typeof parsed.cleanSvg === 'string' && parsed.cleanSvg.includes('<svg')) {
-      let svgCode = parsed.cleanSvg.replace(/```xml/g, '').replace(/```svg/g, '').replace(/```/g, '').trim();
-      const svgStart = svgCode.indexOf('<svg');
-      const svgEnd = svgCode.lastIndexOf('</svg>');
-      if (svgStart !== -1 && svgEnd !== -1) {
-        svgCode = svgCode.slice(svgStart, svgEnd + 6);
+    try {
+      const faithfulResult = await cropRotateAndCleanQuestion({
+        dataUrl: photoDataUrl,
+        questionBox: parsed.question_box_2d,
+        rotationNeeded: parsed.rotation_needed || 0,
+        pencilMarkings: parsed.pencil_markings || [],
+        preserveIllustrations: true,
+      });
+      cleanDataUrl = faithfulResult.cleanDataUrl;
+      croppedRawDataUrl = faithfulResult.rawCroppedDataUrl;
+    } catch (cropCleanErr) {
+      console.warn('cropRotateAndCleanQuestion error, falling back:', cropCleanErr);
+      if (Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4) {
         try {
-          const b64Svg = typeof window !== 'undefined'
-            ? window.btoa(unescape(encodeURIComponent(svgCode)))
-            : Buffer.from(svgCode).toString('base64');
-          cleanDataUrl = `data:image/svg+xml;base64,${b64Svg}`;
-          isSvgCleaned = true;
+          croppedRawDataUrl = await cropImageDataUrlByBox(photoDataUrl, parsed.question_box_2d as [number, number, number, number]);
+          cleanDataUrl = croppedRawDataUrl;
         } catch {
-          cleanDataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(svgCode)}`;
-          isSvgCleaned = true;
+          // ignore
         }
       }
     }
@@ -804,7 +805,8 @@ Output JSON only in this schema:
       topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
       subtopicName: finalSubtopicName,
       confidence: parsed.confidence || 95,
-      isSvgCleaned,
+      isSvgCleaned: false,
+      isFaithfulCleaned: true,
     };
   } catch (err: any) {
     return {

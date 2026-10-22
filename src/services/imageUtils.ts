@@ -237,13 +237,19 @@ export interface AutoCleanOptions {
   mode?: 'balanced' | 'aggressive' | 'gentle';
   removeColorPen?: boolean;
   cleanBorders?: boolean;
+  preserveIllustrations?: boolean;
+}
+
+export interface PencilMarking {
+  box_2d: [number, number, number, number]; // [ymin, xmin, ymax, xmax] (0..1000 scale on original image)
+  type?: 'calculation' | 'circle' | 'underline' | 'margin_note' | string;
 }
 
 /**
  * High-performance pure pixel cleaner for test question photos.
  * Performs adaptive background illumination estimation, eliminates pencil graphite smudges,
- * circles around options (A, B, C, D), student margin scribbles, and blue/red pen marks,
- * while preserving dark printed ink, Turkish characters, punctuation, and diagrams.
+ * student margin calculations, and stray markings, while PRESERVING ALL ORIGINAL
+ * COLORED ILLUSTRATIONS (roses, vases, graphs, tables) and sharp printed text.
  */
 export function cleanImageDataPixels(
   data: Uint8ClampedArray,
@@ -252,8 +258,12 @@ export function cleanImageDataPixels(
   options: AutoCleanOptions = {}
 ): void {
   const mode = options.mode || 'balanced';
-  const removeColorPen = options.removeColorPen !== false;
   const cleanBorders = options.cleanBorders !== false;
+  const removeColorPen = options.removeColorPen === true;
+  const preserveIllustrations =
+    options.preserveIllustrations !== undefined
+      ? options.preserveIllustrations
+      : !removeColorPen;
 
   // Mode cutoffs (normalized against local background paper brightness)
   let inkCutoff = 90;
@@ -385,7 +395,7 @@ export function cleanImageDataPixels(
       const localBg = getLocalBg(x, y);
       const relLum = Math.min(255, (lum / Math.max(1, localBg)) * 255);
 
-      // 1. Pure paper background (brightest areas close to local paper lighting) -> crisp white
+      // 1. Pure paper background -> crisp white
       if (relLum >= 242) {
         data[idx] = 255;
         data[idx + 1] = 255;
@@ -393,13 +403,17 @@ export function cleanImageDataPixels(
         continue;
       }
 
-      // 2. Shaded diagram regions in LGS questions (e.g. light blue "taralı alan" with lum >= 140 and moderate chroma)
-      // Must be strictly preserved in original full color!
-      if (lum >= 140 && chroma >= 14 && chroma <= 65 && relLum < 242) {
+      // 2. Colored printed illustrations (roses, vases, leaves, charts, colored geometry)
+      // When chroma > 14, preserve the original colors & artwork faithfully!
+      if (preserveIllustrations && chroma > 14) {
+        const bgNorm = Math.min(1.25, 255 / Math.max(1, localBg));
+        data[idx] = Math.min(255, Math.round(r * bgNorm));
+        data[idx + 1] = Math.min(255, Math.round(g * bgNorm));
+        data[idx + 2] = Math.min(255, Math.round(b * bgNorm));
         continue;
       }
 
-      // 3. Student colored pen ink (deep blue ballpoint, bright red pen, neon highlighter)
+      // Student colored pen ink (when removeColorPen is true and preserveIllustrations is false)
       if (removeColorPen && (chroma > 60 || (chroma > 25 && lum < 140))) {
         data[idx] = 255;
         data[idx + 1] = 255;
@@ -407,34 +421,192 @@ export function cleanImageDataPixels(
         continue;
       }
 
-      // 4. Other colored printed items (diagram lines, logos)
-      if (chroma > 20) {
+      // 3. Shaded diagram regions in LGS questions (e.g. light blue "taralı alan")
+      if (lum >= 140 && chroma >= 12 && chroma <= 65 && relLum < 242) {
         continue;
       }
 
-      // 5. Neutral paper, pencil graphite, and dark printed ink
+      // 4. Neutral paper, pencil graphite, and dark printed ink
       if (relLum >= pencilCutoff) {
-        // Paper background and pencil graphite scribbles -> PURE WHITE
+        // Paper background and graphite pencil marks -> PURE WHITE
         data[idx] = 255;
         data[idx + 1] = 255;
         data[idx + 2] = 255;
       } else if (relLum <= inkCutoff) {
-        // Printed black ink -> crisp deep dark
+        // Printed text -> crisp dark ink
         const inkFactor = relLum / inkCutoff;
-        const dark = Math.round(inkFactor * 32);
+        const dark = Math.round(inkFactor * 24);
         data[idx] = dark;
         data[idx + 1] = dark;
         data[idx + 2] = dark;
       } else {
         // Anti-aliased font edges & gray diagram borders -> smooth transition
         const t = (relLum - inkCutoff) / (pencilCutoff - inkCutoff);
-        const smoothVal = Math.round(32 + Math.pow(t, 1.4) * (255 - 32));
+        const smoothVal = Math.round(24 + Math.pow(t, 1.3) * (255 - 24));
         data[idx] = smoothVal;
         data[idx + 1] = smoothVal;
         data[idx + 2] = smoothVal;
       }
     }
   }
+}
+
+/**
+ * High-Fidelity Auto-Crop, Straighten, and Clean Pipeline:
+ * Crops the question area, straightens rotation if taken sideways, removes pencil marks & margin calculations,
+ * and whitens the paper while PRESERVING 100% OF ORIGINAL ILLUSTRATIONS AND COLORS faithfully.
+ */
+export function cropRotateAndCleanQuestion(params: {
+  dataUrl: string;
+  questionBox?: [number, number, number, number]; // [ymin, xmin, ymax, xmax] 0..1000 on original image
+  rotationNeeded?: number; // 0, 90, 180, 270 (degrees clockwise)
+  pencilMarkings?: PencilMarking[];
+  preserveIllustrations?: boolean;
+}): Promise<{ cleanDataUrl: string; rawCroppedDataUrl: string }> {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      resolve({ cleanDataUrl: params.dataUrl, rawCroppedDataUrl: params.dataUrl });
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => reject(new Error('Görüntü işlenirken yüklenemedi.'));
+    img.onload = () => {
+      try {
+        const origW = img.naturalWidth || img.width;
+        const origH = img.naturalHeight || img.height;
+
+        // 1. Determine crop coordinates
+        let qBox = params.questionBox;
+        if (!qBox || !Array.isArray(qBox) || qBox.length !== 4) {
+          qBox = [0, 0, 1000, 1000];
+        }
+        const [ymin, xmin, ymax, xmax] = qBox;
+        const cropX0 = Math.max(0, Math.round((xmin / 1000) * origW));
+        const cropY0 = Math.max(0, Math.round((ymin / 1000) * origH));
+        const cropW = Math.max(20, Math.min(origW - cropX0, Math.round(((xmax - xmin) / 1000) * origW)));
+        const cropH = Math.max(20, Math.min(origH - cropY0, Math.round(((ymax - ymin) / 1000) * origH)));
+
+        // 2. Crop to intermediate canvas
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = cropW;
+        cropCanvas.height = cropH;
+        const cCtx = cropCanvas.getContext('2d');
+        if (!cCtx) {
+          resolve({ cleanDataUrl: params.dataUrl, rawCroppedDataUrl: params.dataUrl });
+          return;
+        }
+        cCtx.drawImage(img, cropX0, cropY0, cropW, cropH, 0, 0, cropW, cropH);
+
+        // 3. Handle rotation if needed (0, 90, 180, 270 clockwise)
+        const rot = (((params.rotationNeeded || 0) % 360) + 360) % 360;
+        let uprightCanvas = cropCanvas;
+
+        if (rot !== 0) {
+          uprightCanvas = document.createElement('canvas');
+          if (rot === 90 || rot === 270) {
+            uprightCanvas.width = cropH;
+            uprightCanvas.height = cropW;
+          } else {
+            uprightCanvas.width = cropW;
+            uprightCanvas.height = cropH;
+          }
+          const uCtx = uprightCanvas.getContext('2d');
+          if (uCtx) {
+            uCtx.fillStyle = '#ffffff';
+            uCtx.fillRect(0, 0, uprightCanvas.width, uprightCanvas.height);
+            uCtx.save();
+            uCtx.translate(uprightCanvas.width / 2, uprightCanvas.height / 2);
+            uCtx.rotate((rot * Math.PI) / 180);
+            uCtx.drawImage(cropCanvas, -cropW / 2, -cropH / 2);
+            uCtx.restore();
+          }
+        }
+
+        const rawCroppedDataUrl = uprightCanvas.toDataURL('image/jpeg', 0.90);
+
+        // 4. Create clean canvas
+        const cleanCanvas = document.createElement('canvas');
+        cleanCanvas.width = uprightCanvas.width;
+        cleanCanvas.height = uprightCanvas.height;
+        const cleanCtx = cleanCanvas.getContext('2d');
+        if (!cleanCtx) {
+          resolve({ cleanDataUrl: rawCroppedDataUrl, rawCroppedDataUrl });
+          return;
+        }
+
+        cleanCtx.fillStyle = '#ffffff';
+        cleanCtx.fillRect(0, 0, cleanCanvas.width, cleanCanvas.height);
+        cleanCtx.drawImage(uprightCanvas, 0, 0);
+
+        // 5. Erase student calculation boxes in margins if provided
+        if (params.pencilMarkings && params.pencilMarkings.length > 0) {
+          const boxW = xmax - xmin || 1000;
+          const boxH = ymax - ymin || 1000;
+
+          cleanCtx.fillStyle = '#ffffff';
+          for (const mark of params.pencilMarkings) {
+            if (!mark.box_2d || mark.box_2d.length !== 4) continue;
+            const [mYmin, mXmin, mYmax, mXmax] = mark.box_2d;
+
+            let rx0 = ((mXmin - xmin) / boxW) * cropW;
+            let ry0 = ((mYmin - ymin) / boxH) * cropH;
+            let rx1 = ((mXmax - xmin) / boxW) * cropW;
+            let ry1 = ((mYmax - ymin) / boxH) * cropH;
+
+            let fx0 = rx0,
+              fy0 = ry0,
+              fx1 = rx1,
+              fy1 = ry1;
+            if (rot === 90) {
+              fx0 = cropH - ry1;
+              fy0 = rx0;
+              fx1 = cropH - ry0;
+              fy1 = rx1;
+            } else if (rot === 180) {
+              fx0 = cropW - rx1;
+              fy0 = cropH - ry1;
+              fx1 = cropW - rx0;
+              fy1 = cropH - ry0;
+            } else if (rot === 270) {
+              fx0 = ry0;
+              fy0 = cropW - rx1;
+              fx1 = ry1;
+              fy1 = cropW - rx0;
+            }
+
+            const bx0 = Math.max(0, Math.min(cleanCanvas.width, Math.min(fx0, fx1) - 4));
+            const by0 = Math.max(0, Math.min(cleanCanvas.height, Math.min(fy0, fy1) - 4));
+            const bw = Math.min(cleanCanvas.width - bx0, Math.abs(fx1 - fx0) + 8);
+            const bh = Math.min(cleanCanvas.height - by0, Math.abs(fy1 - fy0) + 8);
+
+            const type = mark.type || 'calculation';
+            if (type === 'calculation' || type === 'margin_note') {
+              cleanCtx.fillRect(bx0, by0, bw, bh);
+            } else if (type === 'underline') {
+              cleanCtx.fillRect(bx0, by0 + bh * 0.5, bw, bh * 0.5);
+            }
+          }
+        }
+
+        // 6. Apply pixel illumination & pencil removal filter
+        const imgData = cleanCtx.getImageData(0, 0, cleanCanvas.width, cleanCanvas.height);
+        cleanImageDataPixels(imgData.data, cleanCanvas.width, cleanCanvas.height, {
+          mode: 'balanced',
+          preserveIllustrations: params.preserveIllustrations !== false,
+          cleanBorders: true,
+        });
+        cleanCtx.putImageData(imgData, 0, 0);
+
+        const cleanDataUrl = cleanCanvas.toDataURL('image/jpeg', 0.92);
+        resolve({ cleanDataUrl, rawCroppedDataUrl });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.src = params.dataUrl;
+  });
 }
 
 /**

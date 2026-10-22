@@ -105,4 +105,55 @@ describe('Otomatik Karalama ve Kurşun Kalem Temizleme Motoru (cleanImageDataPix
     expect(data[borderIdx + 1]).toBe(255);
     expect(data[borderIdx + 2]).toBe(255);
   });
+
+  it('4. Renkli soru çizimlerini (güller, vazolar, yapraklar) aslına sadık korumalı, kurşun kalem yazılarını temizlemelidir', () => {
+    const width = 64;
+    const height = 64;
+    const data = new Uint8ClampedArray(width * height * 4);
+
+    // Light paper background
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 235;
+      data[i + 1] = 232;
+      data[i + 2] = 228;
+      data[i + 3] = 255;
+    }
+
+    // Red rose pixel: R=210, G=30, B=40 (chroma = 180)
+    const roseIdx = (20 * width + 20) * 4;
+    data[roseIdx] = 210;
+    data[roseIdx + 1] = 30;
+    data[roseIdx + 2] = 40;
+
+    // Terracotta vase pixel: R=185, G=105, B=60 (chroma = 125)
+    const vaseIdx = (20 * width + 35) * 4;
+    data[vaseIdx] = 185;
+    data[vaseIdx + 1] = 105;
+    data[vaseIdx + 2] = 60;
+
+    // Graphite pencil mark: R=155, G=155, B=155 (chroma = 0)
+    const pencilIdx = (40 * width + 20) * 4;
+    data[pencilIdx] = 155;
+    data[pencilIdx + 1] = 155;
+    data[pencilIdx + 2] = 155;
+
+    cleanImageDataPixels(data, width, height, {
+      preserveIllustrations: true,
+      cleanBorders: false,
+    });
+
+    // The red rose must NOT be turned to white! Its red color must be preserved
+    expect(data[roseIdx]).toBeGreaterThan(180);
+    expect(data[roseIdx + 1]).toBeLessThan(70);
+    expect(data[roseIdx + 2]).toBeLessThan(80);
+
+    // The terracotta vase color must be preserved
+    expect(data[vaseIdx]).toBeGreaterThan(160);
+    expect(data[vaseIdx + 1]).toBeGreaterThan(80);
+
+    // The graphite pencil marking must be completely erased to pure white
+    expect(data[pencilIdx]).toBe(255);
+    expect(data[pencilIdx + 1]).toBe(255);
+    expect(data[pencilIdx + 2]).toBe(255);
+  });
 });

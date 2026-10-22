@@ -498,7 +498,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           if (aiRes.success) {
             finalDataUrl = aiRes.cleanDataUrl;
             croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
-            isCleaned = Boolean(aiRes.isSvgCleaned);
+            isCleaned = Boolean(aiRes.isFaithfulCleaned || aiRes.isSvgCleaned || (aiRes.cleanDataUrl && aiRes.cleanDataUrl !== (aiRes.rawDataUrl || rawDataUrl)));
             if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
             if (aiRes.topicId) detectedTopId = aiRes.topicId;
             if (aiRes.topicName) detectedTopName = aiRes.topicName;
@@ -679,7 +679,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
             if (aiRes.success) {
               finalDataUrl = aiRes.cleanDataUrl;
               rawDataUrl = aiRes.rawDataUrl || compressed.dataUrl;
-              isCleaned = Boolean(aiRes.isSvgCleaned);
+              isCleaned = Boolean(aiRes.isFaithfulCleaned || aiRes.isSvgCleaned || (aiRes.cleanDataUrl && aiRes.cleanDataUrl !== (aiRes.rawDataUrl || compressed.dataUrl)));
               if (aiRes.subjectId) detectedSubj = aiRes.subjectId;
               if (aiRes.topicId) detectedTopId = aiRes.topicId;
               if (aiRes.topicName) detectedTopName = aiRes.topicName;
