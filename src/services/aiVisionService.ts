@@ -8,6 +8,7 @@ import {
   extractIllustrationSnippet,
   InpaintRegionBox,
   inpaintQuestionDataUrl,
+  MarkRegionType,
   transformBoxToRotatedCrop,
 } from './imageUtils';
 
@@ -21,12 +22,14 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+export const DEFAULT_MODEL = 'gemini-3.5-flash';
 
 export const CANDIDATE_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
   'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
-  'gemini-3.1-flash-lite',
 ];
 
 export function getStoredGeminiApiKey(): string {
@@ -58,15 +61,10 @@ export function saveStoredGeminiApiKey(key: string): void {
 export function getStoredGeminiModel(): string {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
-    if (
-      saved &&
-      (saved === 'gemini-3.5-flash-lite' ||
-        saved === 'gemini-flash-lite-latest' ||
-        saved === 'gemini-3.1-flash-lite')
-    ) {
+    if (saved && (saved === 'gemini-3.5-flash' || saved === 'gemini-3.6-flash')) {
       return saved;
     }
-    // Auto-migrate old quota-exhausted models (gemini-3.5-flash, gemini-3.8-flash, etc.)
+    // Auto-upgrade to high-precision gemini-3.5-flash
     saveStoredGeminiModel(DEFAULT_MODEL);
     return DEFAULT_MODEL;
   } catch {
@@ -727,89 +725,25 @@ export async function cleanCroppedQuestionImage(
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
     // =========================================================================
-    // STAGE 1: Attempt Genuine Image-Editing Model Endpoint
-    // =========================================================================
-    const EDIT_PROMPT =
-      "Edit the supplied original photograph. Remove only the student's handwritten pencil and pen marks, including diagonal crossing lines, X marks, circles, underlines, and margin calculations. Restore the paper underneath the removed marks as naturally as possible. Preserve the original printed mathematics question exactly, including all words, Turkish characters, numbers, negative signs, exponents, fractions, answer choices, colored backgrounds, diagrams, line thicknesses, illustrations, borders, and page layout. Do not rewrite, redraw, regenerate, sharpen, recolor, retype, or otherwise alter any unaffected part of the question. Do not invent mathematical content. Return the edited image.";
-
-    const imageEditModels = [
-      'gemini-2.5-flash-image',
-      'gemini-3.1-flash-image',
-      'gemini-3-pro-image',
-    ];
-
-    let directEditedDataUrl: string | null = null;
-    let imageApiError = '';
-
-    for (const imgModel of imageEditModels) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${imgModel}:generateContent?key=${geminiKey.trim()}`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(30000),
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: EDIT_PROMPT },
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: cleanBase64,
-                    },
-                  },
-                ],
-              },
-            ],
-          }),
-        });
-
-        if (res.ok) {
-          const imgJson = await res.json();
-          const parts = imgJson?.candidates?.[0]?.content?.parts || [];
-          for (const p of parts) {
-            const rawImg = p.inline_data || p.inlineData;
-            if (rawImg && rawImg.data) {
-              directEditedDataUrl = `data:${rawImg.mime_type || 'image/jpeg'};base64,${rawImg.data}`;
-              console.log(`[cleanCroppedQuestionImage] Direct image-editing succeeded with model ${imgModel}`);
-              break;
-            }
-          }
-          if (directEditedDataUrl) break;
-        } else {
-          const errText = await res.text();
-          imageApiError = `${imgModel} (${res.status}): ${errText.slice(0, 100)}`;
-        }
-      } catch (err: any) {
-        imageApiError = err?.message || String(err);
-      }
-    }
-
-    if (imageApiError && !directEditedDataUrl) {
-      console.info(
-        `[cleanCroppedQuestionImage] Direct image-generation endpoint unavailable (${imageApiError}). Using precision mask-controlled localized inpainting with multimodal vision detection.`
-      );
-    }
-
-    // =========================================================================
-    // STAGE 2: Precision Mask-Controlled Localized Inpainting with Vision Detection
+    // Precision Mask-Controlled Localized Inpainting with Vision Detection
     // =========================================================================
     const prompt = `Sen MEB 8. Sınıf LGS sınav soruları üzerinde uzmanlaşmış bir görsel analiz ve kurşun kalem temizleme asistanısın.
 Sana kırpılmış bir LGS soru görseli verildi. [0, 0, 1000, 1000] koordinat sistemi tam olarak bu soru görselini temsil etmektedir (ek kırpma veya döndürme yapma).
 
 GÖREVİN:
-1. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X veya çapraz karalama çizgilerini tespit et.
+1. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı TÜM karalamaları, kenar boşluğundaki bölme/çarpma/çıkarma işlemlerini, el yazısı sayıları, yoğun karalamaları, şekillerin/vazoların hemen üstündeki küçük kalem izlerini/tiklerini, altını çizdiği yerleri, kelime veya şık dairelemelerini ve X işaretlerini eksiksiz tespit et.
    Her bir karalama için:
-   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte tam ve sıkı koordinatlar).
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte; kelime dairelerinde dairenin en üst yayından en alt yayına ve sol/sağ ucuna kadar tüm halkayı kapsa).
    - "type":
-       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
-       * "recoverable": Şık daireleme, alt çizgi, şıkların veya metnin üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
-       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
-   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çizgi", "Metin üzerindeki çapraz karalama").
-   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
-2. "overlap_warning": Basılı soru metni, formül veya şekille yoğun çakışma riski varsa veya high_risk varsa true, aksi halde false.
-3. "overlap_message": Kullanıcıya gösterilecek bilgilendirici açıklama.
+       * "safe": Kenar boşluğundaki veya boş alandaki el yazısı işlem (bölme, çarpma, çıkarma, sayı), yoğun karalama veya çizim üzerindeki iz (basılı soru cümlesiyle çakışmıyor).
+       * "underline": Basılı kelimelerin veya cümlelerin altına çizilmiş kurşun kalem çizgisi.
+       * "circle": Basılı bir kelimenin, sayının veya A, B, C, D şıklarından birinin etrafına çizilmiş daire/halka.
+       * "cross_out": Tablo, takvim günü veya şıkların üzerine çizilmiş X veya çapraz çizgi.
+       * "high_risk": Basılı matematik formülü veya üslü/köklü ifadenin üzeri tamamen okunamayacak kadar simsiyah kapatılmış.
+   - "description": Kısa açıklama (örn: "Sağ alttaki 96/20 bölme işlemi", "Alt ortadaki yoğun karalama", "96 adet gülün etrafındaki daire", "Soru kökünün altındaki çizgi").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini, basılı renkli şekilleri (gül, vazo, tablo) ve basılı şıkları (A, B, C, D) tek başına karalama sanma. Yalnızca öğrencinin kalem izlerini listele. Karalama yoksa boş dizi [] ver.
+2. "overlap_warning": Yalnızca "high_risk" varsa true, aksi halde false.
+3. "overlap_message": Kullanıcıya gösterilecek kısa bilgi mesajı.
 4. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
 5. "detectedTopicName": MEB müfredatındaki konu adı
 6. "detectedSubtopicName": MEB alt kazanım adı
@@ -820,7 +754,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
   "handwritten_marks": [
     {
       "box_2d": [ymin, xmin, ymax, xmax],
-      "type": "safe" | "recoverable" | "high_risk",
+      "type": "safe" | "underline" | "circle" | "cross_out" | "high_risk",
       "description": "string"
     }
   ],
@@ -866,7 +800,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
             generationConfig: {
               responseMimeType: 'application/json',
               temperature: 0.1,
-              thinkingConfig: { thinkingBudget: 1 },
+              thinkingConfig: { thinkingBudget: 256 },
             },
           }),
         });
@@ -916,7 +850,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
     for (const m of rawMarks) {
       if (!m) continue;
       let b = m;
-      let markType: 'safe' | 'recoverable' | 'high_risk' = 'recoverable';
+      let markType: MarkRegionType = 'recoverable';
       let desc = '';
 
       if (typeof m === 'object' && !Array.isArray(m)) {
@@ -1078,18 +1012,20 @@ export async function processQuestionPhotoWithAi(
     const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
 Bu soru fotoğrafını incele:
 1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] koordinatları (0-1000 normalize ölçekte).
-   - Soru numarası, soru kökü, matematiksel formüller/ifadeler, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
-   - Önceki/sonraki soruları, masa, halı, parmak ve sayfa dışı kenar boşluklarını hariç tut.
+   - Soru numarası, soru üst metni, matematiksel formüller/ifadeler, şekiller/görseller, soru kökü ve A, B, C, D şıklarının TAMAMINI (soldan sağa en sağdaki son harfe ve şekle kadar, ~15 birim güvenli kenar payı bırakarak) eksiksiz kapsasın.
+   - Önceki/sonraki soruları, sayfa altındaki "MATEMATİK TESTİ" ve sayfa numarası şeridini, masa, halı ve parmakları hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X işaretleri veya karalamalarının listesi.
+3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı TÜM karalamaları, kenar boşluğundaki bölme/çarpma/çıkarma işlemlerini, el yazısı sayıları, yoğun karalamaları, şekillerin/vazoların hemen üstündeki küçük kalem izlerini/tiklerini, altını çizdiği yerleri, kelime veya şık dairelemelerini ve X işaretlerini eksiksiz tespit et.
    Her bir karalama için:
-   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte).
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte; kelime dairelerinde dairenin en üst yayından en alt yayına ve sol/sağ ucuna kadar tüm halkayı kapsa).
    - "type":
-       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
-       * "recoverable": Şık daireleme, alt çizgi, şıkların üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
-       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
-   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çapraz çizgi").
-   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+       * "safe": Kenar boşluğundaki veya boş alandaki el yazısı işlem (bölme, çarpma, çıkarma, sayı), yoğun karalama veya çizim üzerindeki iz (basılı soru cümlesiyle çakışmıyor).
+       * "underline": Basılı kelimelerin veya cümlelerin altına çizilmiş kurşun kalem çizgisi.
+       * "circle": Basılı bir kelimenin, sayının veya A, B, C, D şıklarından birinin etrafına çizilmiş daire/halka.
+       * "cross_out": Tablo, takvim günü veya şıkların üzerine çizilmiş X veya çapraz çizgi.
+       * "high_risk": Basılı matematik formülü veya üslü/köklü ifadenin üzeri tamamen okunamayacak kadar simsiyah kapatılmış.
+   - "description": Kısa açıklama (örn: "Sağ alttaki 96/20 bölme işlemi", "Alt ortadaki yoğun karalama", "96 adet gülün etrafındaki daire", "Soru kökünün altındaki çizgi").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini, basılı renkli şekilleri ve basılı şıkları (A, B, C, D) tek başına karalama sanma. Yalnızca öğrencinin kalem izlerini listele. Karalama yoksa boş dizi [] ver.
 4. "question_number": Soru numarası (örn: "2." veya "3.")
 5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
 6. "detectedTopicName": MEB müfredatındaki konu adı
@@ -1103,7 +1039,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
   "handwritten_marks": [
     {
       "box_2d": [ymin, xmin, ymax, xmax],
-      "type": "safe" | "recoverable" | "high_risk",
+      "type": "safe" | "underline" | "circle" | "cross_out" | "high_risk",
       "description": "string"
     }
   ],
@@ -1173,7 +1109,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
               generationConfig: {
                 responseMimeType: 'application/json',
                 temperature: 0.1,
-                thinkingConfig: { thinkingBudget: 1 },
+                thinkingConfig: { thinkingBudget: 256 },
               },
             }),
           });
@@ -1208,6 +1144,38 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         errorMessage: `Yapay zekâ yanıt veremedi (${lastError}). İsterseniz Gemini'den kopyalayıp yeşil 'Panodan Yapıştır' butonunu kullanabilirsiniz.`,
       };
     }
+
+    // Ensure question_box_2d encompasses any circle/underline marks on the question text with a clean margin
+    const qBoxRaw: [number, number, number, number] =
+      Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4
+        ? [
+            Math.max(0, Number(parsed.question_box_2d[0]) - 10),
+            Math.max(0, Number(parsed.question_box_2d[1]) - 15),
+            Math.min(1000, Number(parsed.question_box_2d[2]) + 10),
+            Math.min(1000, Number(parsed.question_box_2d[3]) + 20),
+          ]
+        : [0, 0, 1000, 1000];
+
+    if (Array.isArray(parsed.handwritten_marks)) {
+      let maxTextMarkY = 0;
+      let hasLowMarginScribble = false;
+      for (const hm of parsed.handwritten_marks) {
+        if (hm && Array.isArray(hm.box_2d) && hm.box_2d.length === 4) {
+          if (hm.type === 'underline' || hm.type === 'circle') {
+            qBoxRaw[0] = Math.min(qBoxRaw[0], Math.max(0, Number(hm.box_2d[0]) - 15));
+            qBoxRaw[1] = Math.min(qBoxRaw[1], Math.max(0, Number(hm.box_2d[1]) - 15));
+            qBoxRaw[3] = Math.max(qBoxRaw[3], Math.min(1000, Number(hm.box_2d[3]) + 20));
+            maxTextMarkY = Math.max(maxTextMarkY, Number(hm.box_2d[2]));
+          } else if (hm.type === 'safe' && Number(hm.box_2d[0]) > 710 && Number(hm.box_2d[2]) > 820) {
+            hasLowMarginScribble = true;
+          }
+        }
+      }
+      if (hasLowMarginScribble && maxTextMarkY > 0 && maxTextMarkY < 700 && qBoxRaw[2] > 820) {
+        qBoxRaw[2] = 760;
+      }
+    }
+    parsed.question_box_2d = qBoxRaw;
 
     // 1. Crop & Straighten the original camera photo to upright question (Immutable Raw Cropped Base)
     let croppedRawDataUrl = photoDataUrl;
@@ -1268,7 +1236,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 
       for (const m of rawMarks) {
         let b: any = m;
-        let markType: 'safe' | 'recoverable' | 'high_risk' = 'recoverable';
+        let markType: MarkRegionType = 'recoverable';
         let desc = '';
 
         if (m && typeof m === 'object' && !Array.isArray(m)) {

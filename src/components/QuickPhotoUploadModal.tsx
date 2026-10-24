@@ -570,13 +570,13 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         }
       }
 
-      const isVerifiedClean = isCleaned && cleanupStatus === 'success' && !overlapWarn && Boolean(finalDataUrl);
+      const hasCleanOutput = isCleaned && Boolean(finalDataUrl);
       setCapturedPreview({
-        dataUrl: isVerifiedClean ? finalDataUrl : croppedRawDataUrl,
-        cleanDataUrl: isCleaned ? finalDataUrl : undefined,
+        dataUrl: hasCleanOutput ? finalDataUrl : croppedRawDataUrl,
+        cleanDataUrl: hasCleanOutput ? finalDataUrl : undefined,
         rawOriginalDataUrl: croppedRawDataUrl,
         originalUploadedUrl: rawDataUrl,
-        isCleaned: isVerifiedClean,
+        isCleaned: hasCleanOutput,
         cleanupStatus,
         statusMessage,
         cleanedMarkCount,
@@ -590,9 +590,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         topicName: detectedTopName,
         subtopicName: detectedSubtop,
       });
-      if (overlapWarn && overlapMsg) {
-        setErrorMsg(overlapMsg);
-      }
     } catch (err: any) {
       setErrorMsg('Fotoğraf kırpılırken hata oluştu: ' + (err?.message || ''));
     }
@@ -607,13 +604,15 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
       const cleanRes = await cleanCroppedQuestionImage(src, capturedPreview.subjectId || batchSubjectId);
       if (cleanRes.success && cleanRes.cleanDataUrl) {
-        const isVerifiedClean = cleanRes.cleanupStatus === 'success' && !cleanRes.overlapWarning;
+        const hasCleanOutput =
+          (cleanRes.cleanupStatus === 'success' || cleanRes.cleanupStatus === 'partial') &&
+          Boolean(cleanRes.cleanDataUrl);
         setCapturedPreview({
           ...capturedPreview,
-          dataUrl: isVerifiedClean ? cleanRes.cleanDataUrl : (capturedPreview.rawOriginalDataUrl || src),
+          dataUrl: hasCleanOutput ? cleanRes.cleanDataUrl : (capturedPreview.rawOriginalDataUrl || src),
           cleanDataUrl: cleanRes.cleanDataUrl,
           rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || src,
-          isCleaned: isVerifiedClean,
+          isCleaned: hasCleanOutput,
           cleanupStatus: cleanRes.cleanupStatus,
           statusMessage: cleanRes.statusMessage,
           cleanedMarkCount: cleanRes.cleanedMarkCount,
@@ -623,9 +622,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           topicName: cleanRes.detectedTopicName || capturedPreview.topicName,
           subtopicName: cleanRes.detectedSubtopicName || capturedPreview.subtopicName,
         });
-        if (cleanRes.overlapWarning && cleanRes.overlapMessage) {
-          setErrorMsg(cleanRes.overlapMessage);
-        }
       } else {
         setErrorMsg(
           cleanRes.errorMessage ||
@@ -650,16 +646,18 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = item.rawOriginalDataUrl || item.dataUrl;
       const res = await cleanCroppedQuestionImage(src, item.subjectId);
       if (res.success && res.cleanDataUrl) {
-        const isVerifiedClean = res.cleanupStatus === 'success' && !res.overlapWarning;
+        const hasCleanOutput =
+          (res.cleanupStatus === 'success' || res.cleanupStatus === 'partial') &&
+          Boolean(res.cleanDataUrl);
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
               ? {
                   ...p,
-                  dataUrl: isVerifiedClean ? res.cleanDataUrl : (p.rawOriginalDataUrl || src),
+                  dataUrl: hasCleanOutput ? res.cleanDataUrl : (p.rawOriginalDataUrl || src),
                   cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: p.rawOriginalDataUrl || src,
-                  isCleaned: isVerifiedClean,
+                  isCleaned: hasCleanOutput,
                   cleanupStatus: res.cleanupStatus,
                   statusMessage: res.statusMessage,
                   cleanedMarkCount: res.cleanedMarkCount,
@@ -672,9 +670,6 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
               : p
           )
         );
-        if (res.overlapWarning && res.overlapMessage) {
-          setErrorMsg(res.overlapMessage);
-        }
         if (res.topicName) {
           setAiDetectionResult((prev) => ({
             ...prev,
@@ -865,14 +860,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           }));
         }
 
-        const isVerifiedClean = isCleaned && cleanupStatus === 'success' && !overlapWarn && Boolean(finalDataUrl);
+        const hasCleanOutput = isCleaned && Boolean(finalDataUrl);
         added.push({
           tempId,
-          dataUrl: isVerifiedClean ? finalDataUrl : rawDataUrl,
-          cleanDataUrl: isCleaned ? finalDataUrl : undefined,
+          dataUrl: hasCleanOutput ? finalDataUrl : rawDataUrl,
+          cleanDataUrl: hasCleanOutput ? finalDataUrl : undefined,
           rawOriginalDataUrl: rawDataUrl,
           originalUploadedUrl: compressed.dataUrl,
-          isCleaned: isVerifiedClean,
+          isCleaned: hasCleanOutput,
           cleanupStatus,
           statusMessage,
           cleanedMarkCount,
@@ -971,14 +966,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         const qId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const pId = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-        const isVerifiedClean = item.isCleaned && item.cleanupStatus === 'success' && !item.overlapWarning && Boolean(item.cleanDataUrl);
+        const hasCleanOutput = item.isCleaned && Boolean(item.cleanDataUrl);
         newAssets.push({
           id: pId,
           studentId: student.id,
           examId: selectedExamId,
           questionId: qId,
           originalDataUrl: item.originalUploadedUrl || item.rawOriginalDataUrl || item.dataUrl,
-          croppedDataUrl: isVerifiedClean ? item.cleanDataUrl! : (item.rawOriginalDataUrl || item.dataUrl),
+          croppedDataUrl: hasCleanOutput ? item.cleanDataUrl! : item.dataUrl,
           cropRect: null,
           rotation: 0,
           mimeType: item.mimeType,

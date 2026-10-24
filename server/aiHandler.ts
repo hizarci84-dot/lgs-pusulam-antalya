@@ -308,7 +308,7 @@ export interface AICleanQuestionResponse {
   rotation_needed?: number;
   handwritten_marks?: Array<{
     box_2d: [number, number, number, number];
-    type: 'safe' | 'recoverable' | 'high_risk';
+    type: 'safe' | 'recoverable' | 'high_risk' | 'underline' | 'circle' | 'cross_out';
     description?: string;
   }>;
   handwritten_marks_boxes?: Array<[number, number, number, number]>;
@@ -345,18 +345,20 @@ export async function cleanQuestionImageServer(
   const prompt = `Sen MEB 8. Sınıf LGS sınavı için uzman bir soru analiz ve görsel işleme asistanısın.
 Bu soru fotoğrafını incele:
 1. "question_box_2d": Hedef sorunun [ymin, xmin, ymax, xmax] koordinatları (0-1000 normalize ölçekte).
-   - Soru numarası, soru kökü, matematiksel formüller/ifadeler, şekiller/görseller ve A, B, C, D şıklarının tamamını kapsasın.
-   - Önceki/sonraki soruları, masa, halı, parmak ve sayfa dışı kenar boşluklarını hariç tut.
+   - Soru numarası, soru üst metni, matematiksel formüller/ifadeler, şekiller/görseller, soru kökü ve A, B, C, D şıklarının TAMAMINI (soldan sağa en sağdaki son harfe ve şekle kadar, ~15 birim güvenli kenar payı bırakarak) eksiksiz kapsasın.
+   - Önceki/sonraki soruları, sayfa altındaki "MATEMATİK TESTİ" ve sayfa numarası şeridini, masa, halı ve parmakları hariç tut.
 2. "rotation_needed": Soruyu düz (okunabilir) yapmak için saat yönünde dönme açısı: 0 | 90 | 180 | 270. Fotoğraf zaten dik ise 0 ver.
-3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı karalamalar, el yazısı hesaplamalar, altını çizdiği yerler, şık dairelemeleri, büyük X işaretleri veya karalamalarının listesi.
+3. "handwritten_marks": Öğrencinin kurşun kalemle veya tükenmez kalemle soru üzerine yaptığı TÜM karalamaları, kenar boşluğundaki bölme/çarpma/çıkarma işlemlerini, el yazısı sayıları, yoğun karalamaları, şekillerin/vazoların hemen üstündeki küçük kalem izlerini/tiklerini, altını çizdiği yerleri, kelime veya şık dairelemelerini ve X işaretlerini eksiksiz tespit et.
    Her bir karalama için:
-   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte).
+   - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte; kelime dairelerinde dairenin en üst yayından en alt yayına ve sol/sağ ucuna kadar tüm halkayı kapsa).
    - "type":
-       * "safe": Kenar boşluğundaki veya beyaz alandaki hesaplama, not veya karalama (basılı yazıyla çakışmıyor).
-       * "recoverable": Şık daireleme, alt çizgi, şıkların üzerini çizen X veya çapraz çizgi (matbaa yazısıyla çakışıyor ancak matbaa yazısı kurtarılabilir).
-       * "high_risk": Basılı matematik formülü, üs, kök veya rakamın üzeri tamamen yoğun şekilde karalanmış ve basılı içerik net okunamıyor.
-   - "description": Kısa açıklama (örn: "D şıkkı etrafındaki kurşun kalem dairesi", "Kenardaki bölme işlemi", "Soru kökünün altındaki çapraz çizgi").
-   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini (kök, üs, kesir çizgisi, eksi, artı), basılı şekil/çizimleri, basılı renkli alanları ve basılı şıkları (A, B, C, D) ASLA karalama kutusuna dahil etme. Yalnızca öğrencinin el yazısı/kalem izlerini kapsa. Karalama yoksa boş dizi [] ver.
+       * "safe": Kenar boşluğundaki veya boş alandaki el yazısı işlem (bölme, çarpma, çıkarma, sayı), yoğun karalama veya çizim üzerindeki iz (basılı soru cümlesiyle çakışmıyor).
+       * "underline": Basılı kelimelerin veya cümlelerin altına çizilmiş kurşun kalem çizgisi.
+       * "circle": Basılı bir kelimenin, sayının veya A, B, C, D şıklarından birinin etrafına çizilmiş daire/halka.
+       * "cross_out": Tablo, takvim günü veya şıkların üzerine çizilmiş X veya çapraz çizgi.
+       * "high_risk": Basılı matematik formülü veya üslü/köklü ifadenin üzeri tamamen okunamayacak kadar simsiyah kapatılmış.
+   - "description": Kısa açıklama (örn: "Sağ alttaki 96/20 bölme işlemi", "Alt ortadaki yoğun karalama", "96 adet gülün etrafındaki daire", "Soru kökünün altındaki çizgi").
+   DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini, basılı renkli şekilleri ve basılı şıkları (A, B, C, D) tek başına karalama sanma. Yalnızca öğrencinin kalem izlerini listele. Karalama yoksa boş dizi [] ver.
 4. "question_number": Soru numarası (örn: "2." veya "3.")
 5. "detectedSubject": "turkce" | "matematik" | "fen" | "inkilap" | "din" | "ingilizce"
 6. "detectedTopicName": MEB müfredatındaki konu adı
@@ -370,7 +372,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
   "handwritten_marks": [
     {
       "box_2d": [ymin, xmin, ymax, xmax],
-      "type": "safe" | "recoverable" | "high_risk",
+      "type": "safe" | "underline" | "circle" | "cross_out" | "high_risk",
       "description": "string"
     }
   ],
@@ -385,9 +387,11 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 }`;
 
   const candidateModels = [
-    process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite',
+    process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-flash-latest',
+    'gemini-3.5-flash-lite',
     'gemini-flash-lite-latest',
-    'gemini-3.1-flash-lite',
   ];
 
   const cleanBase64 = req.imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
@@ -418,7 +422,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
           generationConfig: {
             responseMimeType: 'application/json',
             temperature: 0.1,
-            thinkingConfig: { thinkingBudget: 1 },
+            thinkingConfig: { thinkingBudget: 256 },
           },
         }),
       });

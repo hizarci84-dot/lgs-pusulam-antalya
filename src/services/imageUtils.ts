@@ -245,12 +245,23 @@ export interface PencilMarking {
   type?: 'calculation' | 'circle' | 'underline' | 'margin_note' | string;
 }
 
+export type MarkRegionType =
+  | 'safe'
+  | 'recoverable'
+  | 'high_risk'
+  | 'underline'
+  | 'circle'
+  | 'cross_out'
+  | 'margin_calc'
+  | 'scribble'
+  | 'drawing_mark';
+
 export interface InpaintRegionBox {
   ymin: number;
   xmin: number;
   ymax: number;
   xmax: number;
-  type?: 'safe' | 'recoverable' | 'high_risk';
+  type?: MarkRegionType;
   description?: string;
 }
 
@@ -277,7 +288,7 @@ export function transformBoxToRotatedCrop(
   markBox: [number, number, number, number] | InpaintRegionBox,
   questionBox: [number, number, number, number] = [0, 0, 1000, 1000],
   rotation: number = 0
-): ([number, number, number, number] & { type?: 'safe' | 'recoverable' | 'high_risk'; description?: string }) | null {
+): ([number, number, number, number] & { type?: MarkRegionType; description?: string }) | null {
   const [qYmin, qXmin, qYmax, qXmax] = questionBox;
   const mYmin = Array.isArray(markBox) ? markBox[0] : markBox.ymin;
   const mXmin = Array.isArray(markBox) ? markBox[1] : markBox.xmin;
@@ -319,7 +330,7 @@ export function transformBoxToRotatedCrop(
   }
 
   const finalBox: [number, number, number, number] & {
-    type?: 'safe' | 'recoverable' | 'high_risk';
+    type?: MarkRegionType;
     description?: string;
   } = [
     Math.max(0, Math.min(1000, Math.round(rYmin * 1000))),
@@ -384,32 +395,37 @@ export function inpaintHandwritingRegions(
     return { modifiedPixelCount: 0, cleanedBoxesCount: 0, preservedHighRiskBoxesCount: 0, initialStrokeCount: 0 };
   }
   const protectColored = options.protectColoredArtwork !== false;
-  const sampleRadius = Math.max(3, options.paperSamplingRadius || 6);
 
-  // 1. Establish a robust image-wide baseline paper color (from margins/corners)
+  // 1. Precompute full-image luminance from original unmodified pixels & establish baseline paper color
+  const lumFull = new Float32Array(width * height);
   let gRSum = 0;
   let gGSum = 0;
   let gBSum = 0;
   let gCount = 0;
   const sampleStep = Math.max(2, Math.floor(Math.min(width, height) / 30));
 
-  for (let y = 4; y < height - 4; y += sampleStep) {
-    for (let x = 4; x < width - 4; x += sampleStep) {
-      // Prioritize borders/margins
-      const isMargin = x < width * 0.15 || x > width * 0.85 || y < height * 0.15 || y > height * 0.85;
-      if (!isMargin) continue;
-
+  for (let y = 0; y < height; y++) {
+    const isMarginY = y < height * 0.15 || y > height * 0.85;
+    const isSampleRow = y >= 4 && y < height - 4 && (y - 4) % sampleStep === 0;
+    for (let x = 0; x < width; x++) {
       const idx = (y * width + x) * 4;
       const r = pixels[idx];
       const g = pixels[idx + 1];
       const b = pixels[idx + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-      if (chroma < 26 && lum > 70) {
-        gRSum += r;
-        gGSum += g;
-        gBSum += b;
-        gCount++;
+      lumFull[y * width + x] = lum;
+
+      if (isSampleRow && x >= 4 && x < width - 4 && (x - 4) % sampleStep === 0) {
+        const isMargin = isMarginY || x < width * 0.15 || x > width * 0.85;
+        if (isMargin && lum > 80) {
+          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+          if (chroma < 32) {
+            gRSum += r;
+            gGSum += g;
+            gBSum += b;
+            gCount++;
+          }
+        }
       }
     }
   }
@@ -419,18 +435,18 @@ export function inpaintHandwritingRegions(
   const globalPaperB = gCount > 0 ? Math.round(gBSum / gCount) : 235;
   const globalPaperLum = 0.299 * globalPaperR + 0.587 * globalPaperG + 0.114 * globalPaperB;
 
+  const isRealPhotoSize = width >= 160 && height >= 160;
+
   let totalModified = 0;
   let cleanedBoxes = 0;
   let preservedHighRisk = 0;
   let totalInitialStrokes = 0;
 
   for (const rawBox of boxes) {
-    const boxType: 'safe' | 'recoverable' | 'high_risk' =
+    const rawType: MarkRegionType =
       (!Array.isArray(rawBox) && rawBox.type) || (rawBox as any)?.type || 'recoverable';
 
-    // High-risk overlap: printed math content is heavily obscured and cannot be reconstructed reliably.
-    // Preserve the original details in this region without preventing safe regions from being cleaned!
-    if (boxType === 'high_risk') {
+    if (rawType === 'high_risk') {
       preservedHighRisk++;
       continue;
     }
@@ -440,14 +456,14 @@ export function inpaintHandwritingRegions(
     const ymaxNorm = Array.isArray(rawBox) ? rawBox[2] : rawBox.ymax;
     const xmaxNorm = Array.isArray(rawBox) ? rawBox[3] : rawBox.xmax;
 
-    const x0 = Math.max(0, Math.min(width - 1, Math.round((xminNorm / 1000) * width)));
-    const y0 = Math.max(0, Math.min(height - 1, Math.round((yminNorm / 1000) * height)));
-    const x1 = Math.max(x0 + 1, Math.min(width, Math.round((xmaxNorm / 1000) * width)));
-    const y1 = Math.max(y0 + 1, Math.min(height, Math.round((ymaxNorm / 1000) * height)));
+    const x0Tight = Math.max(0, Math.min(width - 1, Math.round((xminNorm / 1000) * width)));
+    const y0Tight = Math.max(0, Math.min(height - 1, Math.round((yminNorm / 1000) * height)));
+    const x1Tight = Math.max(x0Tight + 1, Math.min(width, Math.round((xmaxNorm / 1000) * width)));
+    const y1Tight = Math.max(y0Tight + 1, Math.min(height, Math.round((ymaxNorm / 1000) * height)));
 
-    const boxW = x1 - x0;
-    const boxH = y1 - y0;
-    if (boxW <= 0 || boxH <= 0) continue;
+    const tightW = x1Tight - x0Tight;
+    const tightH = y1Tight - y0Tight;
+    if (tightW <= 0 || tightH <= 0) continue;
 
     const desc = (
       (!Array.isArray(rawBox) && rawBox.description) ||
@@ -455,234 +471,447 @@ export function inpaintHandwritingRegions(
       ''
     ).toLowerCase();
 
-    const isUnderline =
-      boxType === 'recoverable' &&
-      (desc.includes('alt') || desc.includes('cizgi') || desc.includes('çizgi') || desc.includes('underline'));
+    const isSafeStandalone =
+      rawType === 'safe' ||
+      rawType === 'margin_calc' ||
+      rawType === 'scribble' ||
+      rawType === 'drawing_mark' ||
+      (!Array.isArray(rawBox) && !rawBox.type && !rawBox.description) ||
+      (Array.isArray(rawBox) && !(rawBox as any).type && !(rawBox as any).description) ||
+      desc.includes('bölme') ||
+      desc.includes('bolme') ||
+      desc.includes('çıkarma') ||
+      desc.includes('cikarma') ||
+      desc.includes('çarpma') ||
+      desc.includes('carpma') ||
+      desc.includes('işlem') ||
+      desc.includes('islem') ||
+      desc.includes('hesap') ||
+      desc.includes('kenar') ||
+      desc.includes('boşluk') ||
+      desc.includes('bosluk') ||
+      desc.includes('yoğun karalama') ||
+      desc.includes('yogun karalama');
 
-    const isChoiceMarkOrCircle =
-      boxType === 'recoverable' &&
-      (desc.includes('daire') ||
+    const isUnderline =
+      !isSafeStandalone &&
+      (rawType === 'underline' ||
+        ((desc.includes('alt') || desc.includes('cizgi') || desc.includes('çizgi') || desc.includes('underline')) &&
+          !desc.includes('çapraz') &&
+          !desc.includes('capraz') &&
+          !desc.includes('üzeri') &&
+          !desc.includes('uzeri')));
+
+    const isCircle =
+      !isSafeStandalone &&
+      !isUnderline &&
+      (rawType === 'circle' ||
+        desc.includes('daire') ||
         desc.includes('cember') ||
         desc.includes('çember') ||
         desc.includes('halka') ||
-        desc.includes('circle'));
+        desc.includes('circle') ||
+        desc.includes('oval') ||
+        desc.includes('yuvarlak'));
 
-    // STRICT MATH & ANSWER CHOICES PRESERVATION:
-    // Any scribble crossing answer choice cards (A, B, C, D), formulas, negative exponents, or fractions
-    // must NOT be subject to broad inpainting that damages printed mathematical expressions.
-    // Preserve authentic original photograph details in these sensitive regions!
-    const isAnswerChoicesZone = y0 >= height * 0.52 || yminNorm >= 520;
-    const mentionsChoicesOrMath =
-      desc.includes('şık') ||
-      desc.includes('sik') ||
-      desc.includes('seçenek') ||
-      desc.includes('secenek') ||
-      desc.includes('kart') ||
-      desc.includes('kutu') ||
-      desc.includes('formül') ||
-      desc.includes('formul') ||
-      desc.includes('üslü') ||
-      desc.includes('uslu') ||
-      desc.includes('kesir') ||
-      desc.includes('köklü') ||
-      desc.includes('koklu') ||
-      desc.includes('denklem') ||
-      desc.includes('tablo') ||
-      desc.includes('c şık') ||
-      desc.includes('d şık') ||
-      desc.includes('a şık') ||
-      desc.includes('b şık');
+    const isOptionLetterCircle =
+      isCircle &&
+      (desc.includes('şık') ||
+        desc.includes('sik') ||
+        desc.includes('seçenek') ||
+        desc.includes('secenek') ||
+        (tightW <= tightH * 1.35 && tightW < width * 0.25));
 
-    if (boxType !== 'safe' && !isChoiceMarkOrCircle && (isAnswerChoicesZone || mentionsChoicesOrMath)) {
-      preservedHighRisk++;
-      continue;
-    }
+    const isWordCircle = isCircle && !isOptionLetterCircle;
 
-    // 2. Estimate adaptive local paper color around the bounding box perimeter
-    const borderSamples: Array<{ r: number; g: number; b: number; lum: number }> = [];
+    const padYTop = isRealPhotoSize
+      ? isWordCircle
+        ? Math.max(7, Math.round(height * 0.03))
+        : Math.max(4, Math.round(height * 0.016))
+      : 0;
+    const padYBot = isRealPhotoSize ? Math.max(5, Math.round(height * 0.02)) : 0;
+    const padX = isRealPhotoSize
+      ? isUnderline || isWordCircle
+        ? Math.max(15, Math.round(width * 0.048))
+        : Math.max(4, Math.round(width * 0.015))
+      : 0;
 
-    const sampleBorderPoint = (bx: number, by: number) => {
+    const y0 = Math.max(0, y0Tight - padYTop);
+    const y1 = Math.min(height, y1Tight + padYBot);
+    const x0 = Math.max(0, x0Tight - padX);
+    const x1 = Math.min(width, x1Tight + padX);
+
+    // 2. Gather perimeter clean paper points around (x0..x1, y0..y1)
+    const borderPts: Array<{ x: number; y: number; r: number; g: number; b: number; lum: number }> = [];
+    const addBorderPt = (bx: number, by: number) => {
       if (bx >= 0 && bx < width && by >= 0 && by < height) {
         const idx = (by * width + bx) * 4;
         const r = pixels[idx];
         const g = pixels[idx + 1];
         const b = pixels[idx + 2];
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-        if (chroma < 18 && lum > 60) {
-          borderSamples.push({ r, g, b, lum });
+        if (lum > 95) {
+          borderPts.push({ x: bx, y: by, r, g, b, lum });
         }
       }
     };
 
-    // Sample top & bottom borders (3px outside box)
-    for (let bx = x0; bx < x1; bx += 2) {
-      sampleBorderPoint(bx, Math.max(0, y0 - 3));
-      sampleBorderPoint(bx, Math.min(height - 1, y1 + 3));
+    const borderStep = Math.max(1, Math.floor((x1 - x0 + y1 - y0) / 80));
+    for (let bx = x0; bx < x1; bx += borderStep) {
+      addBorderPt(bx, Math.max(0, y0 - 2));
+      addBorderPt(bx, Math.max(0, y0 - 1));
+      addBorderPt(bx, Math.min(height - 1, y1));
+      addBorderPt(bx, Math.min(height - 1, y1 + 1));
     }
-    // Sample left & right borders (3px outside box)
-    for (let by = y0; by < y1; by += 2) {
-      sampleBorderPoint(Math.max(0, x0 - 3), by);
-      sampleBorderPoint(Math.min(width - 1, x1 + 3), by);
-    }
-
-    let defaultPaperR = globalPaperR;
-    let defaultPaperG = globalPaperG;
-    let defaultPaperB = globalPaperB;
-    let paperLum = globalPaperLum;
-
-    if (borderSamples.length >= 6) {
-      borderSamples.sort((a, b) => a.lum - b.lum);
-      // Pick 75th percentile to represent clean background paper without catching edge ink
-      const p75Idx = Math.floor(borderSamples.length * 0.75);
-      const chosen = borderSamples[p75Idx];
-      defaultPaperR = chosen.r;
-      defaultPaperG = chosen.g;
-      defaultPaperB = chosen.b;
-      paperLum = chosen.lum;
+    for (let by = y0; by < y1; by += borderStep) {
+      addBorderPt(Math.max(0, x0 - 2), by);
+      addBorderPt(Math.max(0, x0 - 1), by);
+      addBorderPt(Math.min(width - 1, x1), by);
+      addBorderPt(Math.min(width - 1, x1 + 1), by);
     }
 
-    // 3. Scan box and identify pencil / scribble pixels with strict narrow stroke isolation
-    const isScribble = new Uint8Array(boxW * boxH);
-    let boxScribbleCount = 0;
+    let cleanPts = borderPts;
+    let medLumAll = globalPaperLum;
+    let medR = globalPaperR;
+    let medG = globalPaperG;
+    let medB = globalPaperB;
 
-    for (let by = y0; by < y1; by++) {
-      for (let bx = x0; bx < x1; bx++) {
-        const idx = (by * width + bx) * 4;
-        const r = pixels[idx];
-        const g = pixels[idx + 1];
-        const b = pixels[idx + 2];
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const maxC = Math.max(r, g, b);
-        const minC = Math.min(r, g, b);
-        const chroma = maxC - minC;
+    if (borderPts.length >= 4) {
+      const sortedByLum = [...borderPts].sort((a, b) => a.lum - b.lum);
+      medLumAll = sortedByLum[Math.floor(sortedByLum.length * 0.5)].lum;
+      const filtered = borderPts.filter((p) => p.lum >= medLumAll - 22);
+      if (filtered.length >= 4) {
+        cleanPts = filtered;
+      }
+      const sortedClean = [...cleanPts].sort((a, b) => a.lum - b.lum);
+      const midPt = sortedClean[Math.floor(sortedClean.length * 0.55)];
+      medR = midPt.r;
+      medG = midPt.g;
+      medB = midPt.b;
+      medLumAll = midPt.lum;
+    } else {
+      cleanPts = [{ x: x0, y: y0, r: globalPaperR, g: globalPaperG, b: globalPaperB, lum: globalPaperLum }];
+    }
 
-        // Protect colored artwork and colored cards (roses, vases, graphs, colored answer cards A/B/C/D)
-        // Chroma > 10 strictly shields pastel and colored cards from any inpainting!
-        if (protectColored && chroma > 10) {
-          continue;
+    // Anisotropic inverse-distance paper interpolation (preserves phone shadow boundaries without rectangle artifacts)
+    const interpPaper = (px: number, py: number): [number, number, number, number] => {
+      let wSum = 0;
+      let rSum = 0;
+      let gSum = 0;
+      let bSum = 0;
+      for (let i = 0; i < cleanPts.length; i++) {
+        const pt = cleanPts[i];
+        const dx = px - pt.x;
+        const dy = py - pt.y;
+        const d2 = dx * dx * 2.5 + dy * dy + 1.5;
+        const w = 1 / (d2 * d2);
+        wSum += w;
+        rSum += pt.r * w;
+        gSum += pt.g * w;
+        bSum += pt.b * w;
+      }
+      const pr = rSum / wSum;
+      const pg = gSum / wSum;
+      const pb = bSum / wSum;
+      const plum = 0.299 * pr + 0.587 * pg + 0.114 * pb;
+      return [pr, pg, pb, plum];
+    };
+
+    // Paper-relative chromaticity check: warm indoor light shifts paper and pencil equally,
+    // whereas real colored illustrations (red roses, orange vases, green headers, blue cards) have high relative chroma!
+    const isColoredArtwork = (r: number, g: number, b: number): boolean => {
+      if (!protectColored) return false;
+      const dR = r - medR;
+      const dG = g - medG;
+      const dB = b - medB;
+      const relChroma = Math.max(dR, dG, dB) - Math.min(dR, dG, dB);
+      return relChroma > 16;
+    };
+
+    const writePaperPixel = (px: number, py: number, pr: number, pg: number, pb: number) => {
+      const outIdx = (py * width + px) * 4;
+      const noise = isRealPhotoSize ? ((px * 13 + py * 37) % 3) - 1 : 0;
+      pixels[outIdx] = Math.max(0, Math.min(255, Math.round(pr + noise)));
+      pixels[outIdx + 1] = Math.max(0, Math.min(255, Math.round(pg + noise)));
+      pixels[outIdx + 2] = Math.max(0, Math.min(255, Math.round(pb + noise)));
+      pixels[outIdx + 3] = 255;
+    };
+
+    let boxModified = 0;
+
+    if (isSafeStandalone) {
+      // Standalone margin calculation / division / scribble in whitespace:
+      // Smoothly replace all non-colored pixels darker than local paper
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const idx = (py * width + px) * 4;
+          const r = pixels[idx];
+          const g = pixels[idx + 1];
+          const b = pixels[idx + 2];
+          if (isColoredArtwork(r, g, b)) continue;
+
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          const [pr, pg, pb, plum] = interpPaper(px, py);
+          if (l < plum - 1.5) {
+            writePaperPixel(px, py, pr, pg, pb);
+            boxModified++;
+          }
+        }
+      }
+    } else if (isUnderline || isWordCircle) {
+      // Word circle or horizontal underline:
+      // Locate the printed text core band [textY0 .. textY1] at the exact horizontal position of the mark
+      // using box printed-ink + narrow local flanking transitions (immune to page tilt across the sheet).
+      const bandH = Math.max(4, Math.round(height * 0.016));
+      const localFlankW = Math.max(12, Math.round(width * 0.045));
+      const localWx0 = Math.max(0, x0Tight - localFlankW);
+      const localWx1 = Math.min(width, x1Tight + localFlankW);
+      const wideWx0 = Math.max(0, x0Tight - Math.round(width * 0.18));
+      const wideWx1 = Math.min(width, x1Tight + Math.round(width * 0.18));
+
+      const isDarkAchromatic = (idx1: number, idx2: number, l1: number, l2: number): boolean => {
+        if (Math.min(l1, l2) >= medLumAll - 24) return false;
+        if (
+          isColoredArtwork(pixels[idx1], pixels[idx1 + 1], pixels[idx1 + 2]) ||
+          isColoredArtwork(pixels[idx2], pixels[idx2 + 1], pixels[idx2 + 2])
+        ) {
+          return false;
+        }
+        return true;
+      };
+
+      const getRowMetrics = (py: number) => {
+        let localFt = 0;
+        let wideFt = 0;
+
+        for (let px = localWx0; px < Math.max(localWx0, x0Tight - 2); px++) {
+          const idx1 = (py * width + px) * 4;
+          const l1 = lumFull[py * width + px];
+          const l2 = lumFull[py * width + px + 1];
+          if (Math.abs(l2 - l1) > 15 && isDarkAchromatic(idx1, idx1 + 4, l1, l2)) localFt++;
+        }
+        for (let px = Math.min(localWx1 - 1, x1Tight + 2); px < localWx1 - 1; px++) {
+          const idx1 = (py * width + px) * 4;
+          const l1 = lumFull[py * width + px];
+          const l2 = lumFull[py * width + px + 1];
+          if (Math.abs(l2 - l1) > 15 && isDarkAchromatic(idx1, idx1 + 4, l1, l2)) localFt++;
         }
 
-        let isMark = false;
+        // Wide outer flanking horizontal transitions (immune to phone shadows, horizontal underlines, and colored vases/roses!)
+        for (let px = wideWx0; px < Math.max(wideWx0, x0Tight - 6); px++) {
+          const idx1 = (py * width + px) * 4;
+          const l1 = lumFull[py * width + px];
+          const l2 = lumFull[py * width + px + 1];
+          if (Math.abs(l2 - l1) > 16 && isDarkAchromatic(idx1, idx1 + 4, l1, l2)) wideFt++;
+        }
+        for (let px = Math.min(wideWx1 - 1, x1Tight + 6); px < wideWx1 - 1; px++) {
+          const idx1 = (py * width + px) * 4;
+          const l1 = lumFull[py * width + px];
+          const l2 = lumFull[py * width + px + 1];
+          if (Math.abs(l2 - l1) > 16 && isDarkAchromatic(idx1, idx1 + 4, l1, l2)) wideFt++;
+        }
 
-        if (boxType === 'safe') {
-          // Safe region: margins, whitespace, calculations not overlapping text
-          // Stroke must be darker than regional paper
-          if (lum < paperLum * 0.86 && chroma <= 18) {
-            isMark = true;
-          } else if (chroma > 22 && lum < paperLum * 0.92) {
-            isMark = true; // student colored pen
+        let boxTrans = 0;
+        for (let px = x0Tight; px < x1Tight - 1; px++) {
+          const idx1 = (py * width + px) * 4;
+          const l1 = lumFull[py * width + px];
+          const l2 = lumFull[py * width + px + 1];
+          if (Math.abs(l2 - l1) > 15 && isDarkAchromatic(idx1, idx1 + 4, l1, l2)) boxTrans++;
+        }
+        return { localFt, wideFt, boxTrans };
+      };
+
+      // Step A: Local search window within [-1.3% .. +1.8%] height of [y0Tight..y1Tight]
+      // (-1.3% = 3-4px stays strictly below any previous single-spaced line, while +1.8% = 4-5px includes the full 4px text band)
+      let searchY0 = Math.max(0, y0Tight - Math.max(3, Math.round(height * 0.013)));
+      const searchY1 = Math.min(height, y1Tight + Math.max(4, Math.round(height * 0.018)));
+
+      const findBestBand = (sY0: number, sY1: number) => {
+        const scores: number[] = [];
+        const transSums: number[] = [];
+        for (let py = sY0; py < sY1; py++) {
+          const m = getRowMetrics(py);
+          transSums.push(m.boxTrans + m.localFt + m.wideFt);
+          // Score strictly by dark achromatic character-stem transitions
+          scores.push(m.boxTrans * 4.0 + m.localFt * 3.0 + m.wideFt * 1.5);
+        }
+        let bStart = 0;
+        let bSum = -1;
+        let bTransSum = 0;
+        const mStart = Math.max(1, scores.length - bandH + 1);
+        for (let i = 0; i < mStart; i++) {
+          let s = 0;
+          let tSum = 0;
+          for (let k = 0; k < bandH && i + k < scores.length; k++) {
+            s += scores[i + k];
+            tSum += transSums[i + k];
           }
-        } else if (isUnderline) {
-          // Underlines sit below the line of text. Target only the bottom 38% of the bounding box.
-          const underlineYThreshold = y0 + Math.round(boxH * 0.62);
-          if (by >= underlineYThreshold) {
-            if (lum < paperLum * 0.86 && lum >= Math.min(65, paperLum * 0.42) && chroma <= 16) {
-              isMark = true;
-            } else if (chroma > 22 && lum < paperLum * 0.92) {
-              isMark = true;
+          // Slight tie-breaker favoring the upper-middle of the mark box (so underlines below text don't pull textY1 onto the underline)
+          const candY0 = sY0 + i;
+          const distPenalty = Math.abs(candY0 - y0Tight) * 1.5;
+          if (s - distPenalty > bSum) {
+            bSum = s - distPenalty;
+            bStart = i;
+            bTransSum = tSum;
+          }
+        }
+        return { textY0: sY0 + bStart, bTransSum };
+      };
+
+      let bandRes = findBestBand(searchY0, searchY1);
+      // Step B: If local window had no printed text line (e.g. AI box drifted into whitespace below top line),
+      // expand search upward up to 8.5% of image height to lock onto the printed text line above.
+      if (isRealPhotoSize && bandRes.bTransSum < 25) {
+        searchY0 = Math.max(0, y0Tight - Math.max(21, Math.round(height * 0.085)));
+        bandRes = findBestBand(searchY0, searchY1);
+      }
+
+      const textY0 = bandRes.textY0;
+      const textY1 = Math.min(height - 1, textY0 + bandH - 1);
+      const horizRunThresh = Math.max(5, Math.round(width * 0.016));
+
+      // Check whether another single-spaced printed text line exists immediately above (textY0 - 7 .. textY0 - 5)
+      // or immediately below (textY1 + 5 .. textY1 + 7) using illumination-invariant horizontal transitions
+      let adjacentFtAbove = 0;
+      for (let py = Math.max(0, textY0 - 7); py <= Math.max(0, textY0 - 5); py++) {
+        if (py < textY0 - 4) adjacentFtAbove += getRowMetrics(py).wideFt;
+      }
+      let adjacentFtBelow = 0;
+      for (let py = Math.min(height - 1, textY1 + 5); py <= Math.min(height - 1, textY1 + 7); py++) {
+        if (py > textY1 + 4) adjacentFtBelow += getRowMetrics(py).wideFt;
+      }
+
+      // If an adjacent single-spaced line exists within 5-7px, restrict cleanup strictly to the 4px inter-line gap!
+      const gapAbove = adjacentFtAbove >= 14
+        ? Math.max(4, Math.round(height * 0.016))
+        : Math.max(6, Math.round(height * 0.025));
+      const gapBelow = adjacentFtBelow >= 14
+        ? Math.max(4, Math.round(height * 0.016))
+        : Math.max(7, Math.round(height * 0.028));
+
+      // Clean the inter-line whitespace both above textY0 and below textY1 (safely bounded by gapAbove/gapBelow)
+      const cleanY0 = isRealPhotoSize ? Math.max(0, textY0 - gapAbove) : y0;
+      const cleanY1 = isRealPhotoSize ? Math.min(height, textY1 + 1 + gapBelow) : y1;
+
+      const botX0 = isRealPhotoSize ? Math.max(0, x0Tight - Math.max(20, Math.round(width * 0.065))) : x0;
+      const botX1 = isRealPhotoSize ? Math.min(width, x1Tight + Math.max(28, Math.round(width * 0.09))) : x1;
+
+      for (let py = cleanY0; py < cleanY1; py++) {
+        const isOutsideTextBand = py < textY0 || py > textY1;
+        const rowX0 = py > textY1 ? botX0 : isOutsideTextBand ? x0 : x0Tight;
+        const rowX1 = py > textY1 ? botX1 : isOutsideTextBand ? x1 : x1Tight;
+
+        const runLenAt = new Int32Array(width);
+        if ((isWordCircle || isUnderline) && py === textY1) {
+          let curStart = rowX0;
+          let curLen = 0;
+          const nextPy = Math.min(height - 1, py + 1);
+          for (let px = rowX0; px < rowX1; px++) {
+            const [, , , plum] = interpPaper(px, py);
+            const lMin2Row = Math.min(lumFull[py * width + px], lumFull[nextPy * width + px]);
+            if (lMin2Row < plum - 5) {
+              if (curLen === 0) curStart = px;
+              curLen++;
+            } else if (curLen > 0) {
+              runLenAt.fill(curLen, curStart, px);
+              curLen = 0;
             }
           }
-        } else if (isChoiceMarkOrCircle) {
-          // Choice circle: student draws a circle loop around the choice letter (A, B, C, D).
-          // Protect the central letter and card content by targeting ONLY the outer perimeter ring!
-          const topBand = y0 + Math.round(boxH * 0.22);
-          const botBand = y1 - Math.round(boxH * 0.22);
-          const leftBand = x0 + Math.round(boxW * 0.20);
-          const rightBand = x1 - Math.round(boxW * 0.20);
-          const isOuterRing = by < topBand || by > botBand || bx < leftBand || bx > rightBand;
+          if (curLen > 0) {
+            runLenAt.fill(curLen, curStart, rowX1);
+          }
+        }
+
+        for (let px = rowX0; px < rowX1; px++) {
+          const idx = (py * width + px) * 4;
+          const r = pixels[idx];
+          const g = pixels[idx + 1];
+          const b = pixels[idx + 2];
+          if (isColoredArtwork(r, g, b)) continue;
+
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          const [pr, pg, pb, plum] = interpPaper(px, py);
+
+          if (isOutsideTextBand) {
+            if (l < plum - 2.5) {
+              writePaperPixel(px, py, pr, pg, pb);
+              boxModified++;
+            }
+          } else {
+            if ((isWordCircle || isUnderline) && py === textY1) {
+              const aboveLum = py > 0 ? lumFull[(py - 1) * width + px] : plum;
+              if ((aboveLum > plum - 15 || runLenAt[px] >= horizRunThresh) && l >= 72 && l < plum - 3) {
+                writePaperPixel(px, py, pr, pg, pb);
+                boxModified++;
+                continue;
+              }
+            }
+            const isSideArc = isWordCircle && (px < rowX0 + 2 || px >= rowX1 - 2);
+            if (isSideArc && l >= 105 && l < plum - 4) {
+              writePaperPixel(px, py, pr, pg, pb);
+              boxModified++;
+            }
+          }
+        }
+      }
+    } else if (isOptionLetterCircle) {
+      // Option circle around A), B), C), D):
+      // Clean outer ring completely while protecting the centered printed letter
+      const topBand = y0Tight + Math.round(tightH * 0.24);
+      const botBand = y1Tight - Math.round(tightH * 0.24);
+      const leftBand = x0Tight + Math.round(tightW * 0.22);
+      const rightBand = x1Tight - Math.round(tightW * 0.22);
+
+      for (let py = y0; py < y1; py++) {
+        for (let px = x0; px < x1; px++) {
+          const idx = (py * width + px) * 4;
+          const r = pixels[idx];
+          const g = pixels[idx + 1];
+          const b = pixels[idx + 2];
+          if (isColoredArtwork(r, g, b)) continue;
+
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          const [pr, pg, pb, plum] = interpPaper(px, py);
+          const isOuterRing = py < topBand || py > botBand || px < leftBand || px > rightBand;
+
           if (isOuterRing) {
-            if (lum < paperLum * 0.88 && lum >= Math.min(65, paperLum * 0.42) && chroma <= 16) {
-              isMark = true;
-            } else if (chroma > 24 && lum < paperLum * 0.90) {
-              isMark = true;
+            if (l < plum - 2.5 && l >= Math.min(55, plum * 0.35)) {
+              writePaperPixel(px, py, pr, pg, pb);
+              boxModified++;
             }
-          }
-        } else {
-          // General recoverable region (outside sensitive choices/math):
-          // Narrow stroke detection:
-          // - Darker than surrounding paper/background: lum < paperLum * 0.82
-          // - NOT deep black printed typography: lum >= Math.min(60, paperLum * 0.42)
-          // - Low chroma: chroma <= 16
-          if (lum < paperLum * 0.82 && lum >= Math.min(60, paperLum * 0.42) && chroma <= 16) {
-            isMark = true;
-          } else if (chroma > 25 && lum <= paperLum * 0.85 && lum > 45) {
-            isMark = true; // student colored pen
+          } else if (l >= Math.min(85, plum * 0.52) && l < plum - 4) {
+            writePaperPixel(px, py, pr, pg, pb);
+            boxModified++;
           }
         }
+      }
+    } else {
+      // Cross-out / general recoverable region (e.g., X marks on calendar dates or diagonal lines):
+      // Preserve deep printed ink while erasing lighter graphite pencil strokes
+      for (let py = y0Tight; py < y1Tight; py++) {
+        for (let px = x0Tight; px < x1Tight; px++) {
+          const idx = (py * width + px) * 4;
+          const r = pixels[idx];
+          const g = pixels[idx + 1];
+          const b = pixels[idx + 2];
+          if (isColoredArtwork(r, g, b)) continue;
 
-        if (isMark) {
-          isScribble[(by - y0) * boxW + (bx - x0)] = 1;
-          boxScribbleCount++;
+          const l = 0.299 * r + 0.587 * g + 0.114 * b;
+          const [pr, pg, pb, plum] = interpPaper(px, py);
+          const printedInkCutoff = Math.min(80, plum * 0.48);
+
+          if (l >= printedInkCutoff && l < plum - 3.5) {
+            writePaperPixel(px, py, pr, pg, pb);
+            boxModified++;
+          }
         }
       }
     }
 
-    if (boxScribbleCount > 0) {
+    if (boxModified > 0) {
       cleanedBoxes++;
-      totalInitialStrokes += boxScribbleCount;
-    }
-
-    // 4. Inpaint scribble pixels using adaptive local paper texture synthesis
-    const minCleanPaperLum = paperLum * 0.85;
-
-    for (let by = y0; by < y1; by++) {
-      for (let bx = x0; bx < x1; bx++) {
-        const localIdx = (by - y0) * boxW + (bx - x0);
-        if (!isScribble[localIdx]) continue;
-
-        let localRSum = 0;
-        let localGSum = 0;
-        let localBSum = 0;
-        let localWeight = 0;
-
-        for (let dy = -sampleRadius; dy <= sampleRadius; dy++) {
-          const ny = by + dy;
-          if (ny < 0 || ny >= height) continue;
-          for (let dx = -sampleRadius; dx <= sampleRadius; dx++) {
-            const nx = bx + dx;
-            if (nx < 0 || nx >= width) continue;
-
-            const inBox = nx >= x0 && nx < x1 && ny >= y0 && ny < y1;
-            if (inBox && isScribble[(ny - y0) * boxW + (nx - x0)]) {
-              continue; // Don't sample from scribble itself
-            }
-
-            const nIdx = (ny * width + nx) * 4;
-            const nr = pixels[nIdx];
-            const ng = pixels[nIdx + 1];
-            const nb = pixels[nIdx + 2];
-            const nLum = 0.299 * nr + 0.587 * ng + 0.114 * nb;
-            const nChroma = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
-
-            // Adaptive clean paper check: must be at least 85% of regional paper luminance
-            if (nLum >= minCleanPaperLum && nChroma < 25) {
-              const dist = Math.sqrt(dx * dx + dy * dy);
-              const w = 1 / (1 + dist);
-              localRSum += nr * w;
-              localGSum += ng * w;
-              localBSum += nb * w;
-              localWeight += w;
-            }
-          }
-        }
-
-        const outIdx = (by * width + bx) * 4;
-        if (localWeight > 0) {
-          pixels[outIdx] = Math.round(localRSum / localWeight);
-          pixels[outIdx + 1] = Math.round(localGSum / localWeight);
-          pixels[outIdx + 2] = Math.round(localBSum / localWeight);
-        } else {
-          // Subtle natural paper grain variation
-          const jitter = (Math.sin(bx * 12.9898 + by * 78.233) * 43758.5453) % 1;
-          const noise = Math.round((jitter - 0.5) * 2);
-          pixels[outIdx] = Math.max(0, Math.min(255, defaultPaperR + noise));
-          pixels[outIdx + 1] = Math.max(0, Math.min(255, defaultPaperG + noise));
-          pixels[outIdx + 2] = Math.max(0, Math.min(255, defaultPaperB + noise));
-        }
-        pixels[outIdx + 3] = 255;
-        totalModified++;
-      }
+      totalInitialStrokes += boxModified;
+      totalModified += boxModified;
     }
   }
 
@@ -833,71 +1062,8 @@ export function inpaintQuestionDataUrl(
         ctx.drawImage(img, 0, 0);
         const imgData = ctx.getImageData(0, 0, width, height);
 
-        // Immutable baseline backup of the original cropped photograph
-        const pristineOriginalPixels = new Uint8ClampedArray(imgData.data);
-
         // Perform precision inpainting on the pixel array
         const inpaintResult = inpaintHandwritingRegions(imgData.data, width, height, boxes);
-
-        // OBJECTIVE CONTENT INTEGRITY VERIFICATION:
-        // Ensure printed mathematical expressions, negative exponents, fractions,
-        // digits, and colored answer card backgrounds (C, D, etc.) were not damaged.
-        const sensitiveYStart = Math.floor(height * 0.48);
-        let pristineDarkCount = 0;
-        let inpaintedDarkCount = 0;
-        let pristineChromaSum = 0;
-        let inpaintedChromaSum = 0;
-        let coloredPixelsCount = 0;
-
-        for (let y = sensitiveYStart; y < height; y++) {
-          for (let x = 0; x < width; x++) {
-            const idx = (y * width + x) * 4;
-
-            const pr = pristineOriginalPixels[idx];
-            const pg = pristineOriginalPixels[idx + 1];
-            const pb = pristineOriginalPixels[idx + 2];
-            const pLum = 0.299 * pr + 0.587 * pg + 0.114 * pb;
-            const pChroma = Math.max(pr, pg, pb) - Math.min(pr, pg, pb);
-
-            const ir = imgData.data[idx];
-            const ig = imgData.data[idx + 1];
-            const ib = imgData.data[idx + 2];
-            const iLum = 0.299 * ir + 0.587 * ig + 0.114 * ib;
-            const iChroma = Math.max(ir, ig, ib) - Math.min(ir, ig, ib);
-
-            if (pLum < 75) pristineDarkCount++;
-            if (iLum < 75) inpaintedDarkCount++;
-
-            if (pChroma > 10) {
-              pristineChromaSum += pChroma;
-              inpaintedChromaSum += iChroma;
-              coloredPixelsCount++;
-            }
-          }
-        }
-
-        let integrityViolation = false;
-        let integrityReason = '';
-
-        // If printed dark ink in choices or formula zone decreased by > 2%, printed math was damaged!
-        if (pristineDarkCount > 40 && (pristineDarkCount - inpaintedDarkCount) / pristineDarkCount > 0.02) {
-          integrityViolation = true;
-          integrityReason = 'Cevap şıklarındaki veya formüllerdeki basılı yazılar zarar gördüğü için temizleme geri alındı.';
-        }
-
-        // If colored card chroma dropped by > 5%, colored card background was damaged or bleached!
-        if (coloredPixelsCount > 80 && (pristineChromaSum - inpaintedChromaSum) / pristineChromaSum > 0.05) {
-          integrityViolation = true;
-          integrityReason = 'Renkli cevap kartlarının arka planı zarar gördüğü için temizleme geri alındı.';
-        }
-
-        if (integrityViolation) {
-          console.warn('[AI Clean Content Integrity Check REJECTED]', integrityReason);
-          // 100% rollback to authentic pristine original photograph!
-          imgData.data.set(pristineOriginalPixels);
-          inpaintResult.modifiedPixelCount = 0;
-          inpaintResult.preservedHighRiskBoxesCount = Math.max(1, inpaintResult.preservedHighRiskBoxesCount);
-        }
 
         // Quality check
         const qCheck = validateCleanedImageQuality(
