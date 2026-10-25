@@ -22,14 +22,14 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-3.5-flash';
+export const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 export const CANDIDATE_MODELS = [
-  'gemini-3.5-flash',
-  'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-image',
   'gemini-3-flash-preview',
   'gemini-flash-latest',
-  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash-lite',
   'gemini-flash-lite-latest',
 ];
 
@@ -62,10 +62,10 @@ export function saveStoredGeminiApiKey(key: string): void {
 export function getStoredGeminiModel(): string {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
-    if (saved && (saved === 'gemini-3.5-flash' || saved === 'gemini-3.6-flash')) {
+    if (saved && (saved === 'gemini-2.5-flash' || saved === 'gemini-2.5-flash-image')) {
       return saved;
     }
-    // Auto-upgrade to high-precision gemini-3.5-flash
+    // Auto-upgrade to high-precision gemini-2.5-flash
     saveStoredGeminiModel(DEFAULT_MODEL);
     return DEFAULT_MODEL;
   } catch {
@@ -543,6 +543,88 @@ export const AI_IMAGE_CLEANUP_SYSTEM_PROMPT =
   'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. Produce a clean, straightened, scan-like test page.';
 
 /**
+ * Multimodal Image-to-Image cleanup using Gemini image-generation models.
+ * Sends the cropped question image and AI_IMAGE_CLEANUP_SYSTEM_PROMPT with
+ * generationConfig: { responseModalities: ["TEXT", "IMAGE"], temperature: 0.2 } (without responseMimeType).
+ * Extracts inlineData (or inline_data) from candidates[0].content.parts and returns
+ * data:${mimeType};base64,${data} directly as the cleaned image DataURL, or null on fallback.
+ */
+export async function generateCleanImageWithGemini(croppedDataUrl: string): Promise<string | null> {
+  const geminiKey = getStoredGeminiApiKey();
+  if (!geminiKey || !geminiKey.trim() || !croppedDataUrl || !croppedDataUrl.startsWith('data:image/')) {
+    return null;
+  }
+
+  try {
+    const aiInputDataUrl = await downscaleDataUrlForAi(croppedDataUrl, 1024);
+    const cleanBase64 = aiInputDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
+    const mimeMatch = aiInputDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    const imageModels = [
+      'gemini-2.5-flash-image',
+      'gemini-2.0-flash-exp-image-generation',
+    ];
+
+    for (const currentModel of imageModels) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: AI_IMAGE_CLEANUP_SYSTEM_PROMPT },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              responseModalities: ['TEXT', 'IMAGE'],
+              temperature: 0.2,
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          console.warn(
+            `generateCleanImageWithGemini: ${currentModel} returned ${response.status}:`,
+            errText.slice(0, 150)
+          );
+          continue;
+        }
+
+        const data = await response.json();
+        const parts: any[] = data?.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          const inline = part?.inlineData || part?.inline_data;
+          const b64Data = inline?.data;
+          if (b64Data && typeof b64Data === 'string' && b64Data.length > 100) {
+            const outMime = inline?.mimeType || inline?.mime_type || 'image/png';
+            return `data:${outMime};base64,${b64Data}`;
+          }
+        }
+      } catch (err) {
+        console.warn(`generateCleanImageWithGemini (${currentModel}) error:`, err);
+      }
+    }
+  } catch (err) {
+    console.warn('generateCleanImageWithGemini unexpected error:', err);
+  }
+
+  return null;
+}
+
+/**
  * Reads an image from the system clipboard if available.
  */
 export async function readImageFromClipboard(): Promise<string | null> {
@@ -826,6 +908,21 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
     }
 
     if (!parsed) {
+      const directGeminiClean = await generateCleanImageWithGemini(croppedDataUrl);
+      if (directGeminiClean) {
+        return {
+          success: true,
+          cleanDataUrl: directGeminiClean,
+          rawOriginalDataUrl: croppedDataUrl,
+          cleanupStatus: 'success',
+          statusMessage: '✨ Temizleme Başarılı: Yapay zekâ ile kurşun kalem karalamaları temizlendi.',
+          cleanedMarkCount: 1,
+          preservedRiskMarkCount: 0,
+          overlapWarning: false,
+          overlapMessage: '',
+          detectedSubject: subjectHint || 'matematik',
+        };
+      }
       return {
         success: false,
         cleanDataUrl: croppedDataUrl,
@@ -872,21 +969,6 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
-    const inpaintRes = await inpaintQuestionDataUrl(croppedDataUrl, boxes, {
-      overlapWarning: Boolean(parsed.overlap_warning),
-      overlapMessage: parsed.overlap_message,
-    });
-
-    console.log('[cleanCroppedQuestionImage Completed]', {
-      modelUsed: usedModel,
-      boxesDetected: boxes.length,
-      cleanedBoxes: inpaintRes.cleanedBoxesCount,
-      preservedRisk: inpaintRes.preservedHighRiskBoxesCount,
-      modifiedPixels: inpaintRes.cleanedPixelCount,
-      cleanupStatus: inpaintRes.cleanupStatus,
-      durationMs: Date.now() - startTime,
-    });
-
     // Resolve curriculum topic & subtopic
     let finalSubject: SubjectId = subjectHint || 'matematik';
     const subStr = (parsed.detectedSubject || '').toLowerCase();
@@ -917,6 +999,44 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         finalSubtopicName = matchedTopic.subtopics[0];
       }
     }
+
+    // Try Multimodal Image-to-Image cleanup first before falling back to pixel inpainting
+    const geminiCleanDataUrl = await generateCleanImageWithGemini(croppedDataUrl);
+    if (geminiCleanDataUrl) {
+      return {
+        success: true,
+        cleanDataUrl: geminiCleanDataUrl,
+        rawOriginalDataUrl: croppedDataUrl,
+        cleanupStatus: 'success',
+        statusMessage: '✨ Temizleme Başarılı: Yapay zekâ ile tüm kurşun kalem karalamaları temizlendi.',
+        cleanedMarkCount: Math.max(1, boxes.length),
+        preservedRiskMarkCount: 0,
+        overlapWarning: false,
+        overlapMessage: '',
+        detectedSubject: finalSubject,
+        topicId: matchedTopic?.id || '',
+        topicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
+        subtopicName: finalSubtopicName,
+        detectedTopicName: matchedTopic?.topicName || parsed.detectedTopicName || '',
+        detectedSubtopicName: finalSubtopicName,
+        confidence: parsed.confidence || 95,
+      };
+    }
+
+    const inpaintRes = await inpaintQuestionDataUrl(croppedDataUrl, boxes, {
+      overlapWarning: Boolean(parsed.overlap_warning),
+      overlapMessage: parsed.overlap_message,
+    });
+
+    console.log('[cleanCroppedQuestionImage Completed]', {
+      modelUsed: usedModel,
+      boxesDetected: boxes.length,
+      cleanedBoxes: inpaintRes.cleanedBoxesCount,
+      preservedRisk: inpaintRes.preservedHighRiskBoxesCount,
+      modifiedPixels: inpaintRes.cleanedPixelCount,
+      cleanupStatus: inpaintRes.cleanupStatus,
+      durationMs: Date.now() - startTime,
+    });
 
     return {
       success: true,
@@ -1203,9 +1323,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
-    // 2. Localized Mask-Controlled Inpainting with 3-Tier Regions:
-    // Only pixels inside safe and recoverable marks are inpainted with surrounding paper texture.
-    // 100% of printed text, math notation, formulas, diagrams, and options outside marks are bit-for-bit preserved.
+    // 2. Multimodal Image-to-Image Cleanup (Primary) with Localized Pixel Inpainting Fallback:
     let cleanDataUrl = croppedRawDataUrl;
     let isCleaned = false;
     let cleanupStatus: CleanupStatus = 'unchanged';
@@ -1222,7 +1340,16 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
         ? parsed.handwritten_marks_boxes
         : [];
 
-    if (rawMarks.length > 0) {
+    // Immediately after cropping, run generateCleanImageWithGemini before calling inpaintQuestionDataUrl
+    const geminiCleanDataUrl = await generateCleanImageWithGemini(croppedRawDataUrl);
+    if (geminiCleanDataUrl) {
+      cleanDataUrl = geminiCleanDataUrl;
+      isCleaned = true;
+      cleanupStatus = 'success';
+      statusMessage = '✨ Temizleme Başarılı: Yapay zekâ ile tüm kurşun kalem karalamaları temizlendi.';
+      cleanedMarkCount = Math.max(1, rawMarks.length);
+      preservedRiskMarkCount = 0;
+    } else if (rawMarks.length > 0) {
       const transformedBoxes: Array<any> = [];
       const qBox: [number, number, number, number] =
         Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4

@@ -507,11 +507,8 @@ export function inpaintHandwritingRegions(
 
     const isSafeStandalone = rawWantsSafe && isGeometricallyStandalone;
 
-    const isSingleLineHeight = !isRealPhotoSize || tightH <= height * 0.115;
-
     const isUnderline =
       !isSafeStandalone &&
-      isSingleLineHeight &&
       (rawType === 'underline' ||
         ((desc.includes('alt') || desc.includes('cizgi') || desc.includes('çizgi') || desc.includes('underline')) &&
           !desc.includes('çapraz') &&
@@ -522,7 +519,6 @@ export function inpaintHandwritingRegions(
     const isCircle =
       !isSafeStandalone &&
       !isUnderline &&
-      isSingleLineHeight &&
       (rawType === 'circle' ||
         desc.includes('daire') ||
         desc.includes('cember') ||
@@ -926,18 +922,13 @@ export function inpaintHandwritingRegions(
         }
       } else {
         // Real camera photo with multi-line scribble / cross-out (e.g. giant V/X over question):
-        // 1. Bilateral 1D stroke-valley detector:
-        //    A thin pencil stroke (1-4px wide) has clean paper on BOTH opposite sides (p - d and p + d, d = 3..4px)
-        //    that are both brighter than the stroke pixel by >= 7 gray levels.
-        //    Averaging the two opposite sides ((rgb(p-d) + rgb(p+d)) / 2) cancels linear shadow gradients to 0 error!
-        const dirs = [
-          [4, 0],
-          [0, 4],
-          [3, 3],
-          [3, -3],
-          [3, 0],
-          [0, 3],
-        ];
+        // 1. Bilateral 1D stroke-valley detector across [3, 5, 8, 12, 16] pixel search distances
+        //    so both thin and thick pencil scribbles / large crosses over choices are detected and cleaned.
+        const searchDistances = [3, 5, 8, 12, 16];
+        const dirs: Array<[number, number]> = [];
+        for (const d of searchDistances) {
+          dirs.push([d, 0], [0, d], [d, d], [d, -d]);
+        }
         const findBilateralPaper = (px: number, py: number, l: number): [number, number, number, number] | null => {
           let bestDiff = -1;
           let bestPaper: [number, number, number, number] | null = null;
@@ -999,7 +990,7 @@ export function inpaintHandwritingRegions(
           }
         }
 
-        // 3. Clean only true bilateral pencil stroke valleys that do not belong to printed words/formulas
+        // 3. Clean bilateral pencil stroke valleys that do not belong to printed words/formulas
         const guardDistMin = Math.max(5, Math.round(width * 0.016));
         const guardDistMax = Math.max(14, Math.round(width * 0.045));
 
@@ -1016,11 +1007,8 @@ export function inpaintHandwritingRegions(
             if (!bilateral) continue;
             const [pr, pg, pb, plum] = bilateral;
 
-            // Never touch deep black printed ink (l < plum - 46)
-            if (l < plum - 46) continue;
-
             if (!isPrintedRow[py]) {
-              // Inter-line whitespace between printed text rows: safely erase thin pencil stroke
+              // Inter-line whitespace between printed text rows: safely erase pencil stroke
               writePaperPixel(px, py, pr, pg, pb);
               boxModified++;
             } else {
