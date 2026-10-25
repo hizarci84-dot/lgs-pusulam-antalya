@@ -388,7 +388,7 @@ function doPost(e) {
                   <span>Google Drive (Seçiminiz)</span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  Kendi Google hesabınızda 15 GB ücretsiz Drive alanında saklanır. Soru fotoğrafları Drive'ınızda klasörlenir.
+                  Kendi Google hesabınızda 15 GB ücretsiz Drive alanında saklanır. Temizlenen sorular <strong>&quot;Atakan Temizlenmiş Deneme Fotoları&quot;</strong> klasörüne yedeklenir.
                 </p>
                 {provider === 'google_script' && (
                   <span className="absolute top-2 right-2 text-[10px] bg-emerald-600 text-white font-medium px-2 py-0.5 rounded">

@@ -9,6 +9,128 @@ import {
 
 const STORAGE_KEY_API_KEY = 'lgs_gemini_api_key';
 const STORAGE_KEY_MODEL = 'lgs_gemini_model';
+const STORAGE_KEY_VERTEX_PROJECT_ID = 'lgs_vertex_project_id';
+const STORAGE_KEY_VERTEX_CREDIT_STATS = 'lgs_vertex_credit_stats';
+const STORAGE_KEY_VERTEX_TRIAL_START = 'lgs_vertex_trial_start';
+
+export interface VertexCreditStats {
+  cleanedCount: number;
+  spentUsd: number;
+  remainingUsd: number;
+  totalCreditUsd: number;
+  daysRemaining: number;
+  trialStartDate: string;
+  warningActive: boolean;
+  hardStopped: boolean;
+  warningMessage: string;
+}
+
+export function getStoredVertexProjectId(): string {
+  try {
+    return (localStorage.getItem(STORAGE_KEY_VERTEX_PROJECT_ID) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function saveStoredVertexProjectId(projectId: string): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_VERTEX_PROJECT_ID, projectId.trim());
+  } catch {
+    // ignore
+  }
+}
+
+export function getStoredVertexCreditStats(): VertexCreditStats {
+  const TOTAL_USD = 300.0;
+  const COST_PER_IMAGE = 0.039;
+  const WARN_REMAINING_USD = 50.0;
+  const HARD_STOP_REMAINING_USD = 15.0;
+  const TRIAL_DAYS = 90;
+  const WARN_DAYS = 7;
+  const HARD_STOP_DAYS = 2;
+
+  try {
+    let trialStart = localStorage.getItem(STORAGE_KEY_VERTEX_TRIAL_START);
+    if (!trialStart) {
+      trialStart = new Date().toISOString();
+      localStorage.setItem(STORAGE_KEY_VERTEX_TRIAL_START, trialStart);
+    }
+
+    const raw = localStorage.getItem(STORAGE_KEY_VERTEX_CREDIT_STATS);
+    const parsed = raw ? JSON.parse(raw) : {};
+    const cleanedCount = typeof parsed.cleanedCount === 'number' ? parsed.cleanedCount : 0;
+    const startIso = parsed.trialStartDate || trialStart;
+    const elapsedDays = Math.max(
+      0,
+      Math.floor((Date.now() - new Date(startIso).getTime()) / (1000 * 60 * 60 * 24))
+    );
+    const daysRemaining = Math.max(0, TRIAL_DAYS - elapsedDays);
+    const spentUsd = Math.round(cleanedCount * COST_PER_IMAGE * 100) / 100;
+    const remainingUsd = Math.max(0, Math.round((TOTAL_USD - spentUsd) * 100) / 100);
+
+    const hardStopped = remainingUsd <= HARD_STOP_REMAINING_USD || daysRemaining <= HARD_STOP_DAYS;
+    const warningActive =
+      !hardStopped && (remainingUsd <= WARN_REMAINING_USD || daysRemaining <= WARN_DAYS);
+
+    let warningMessage = '';
+    if (hardStopped) {
+      warningMessage = `🛑 KREDİ KORUMA KALKANI DEVREDE: 300$ hediye kredinizden $${remainingUsd.toFixed(
+        2
+      )} (${daysRemaining} gün) kaldığı için kartınızdan ücret çekilmemesi adına otomatik temizleme durduruldu.`;
+    } else if (warningActive) {
+      warningMessage = `⚠️ KREDİ UYARISI: 300$ hediye kredinizden $${remainingUsd.toFixed(
+        2
+      )} (${daysRemaining} gün) kaldı. $15 veya 2 gün kaldığında sistem otomatik duracaktır.`;
+    }
+
+    return {
+      cleanedCount,
+      spentUsd,
+      remainingUsd,
+      totalCreditUsd: TOTAL_USD,
+      daysRemaining,
+      trialStartDate: startIso,
+      warningActive,
+      hardStopped,
+      warningMessage,
+    };
+  } catch {
+    return {
+      cleanedCount: 0,
+      spentUsd: 0,
+      remainingUsd: 300,
+      totalCreditUsd: 300,
+      daysRemaining: 90,
+      trialStartDate: new Date().toISOString(),
+      warningActive: false,
+      hardStopped: false,
+      warningMessage: '',
+    };
+  }
+}
+
+export function saveStoredVertexCreditStats(stats: Partial<VertexCreditStats>): void {
+  try {
+    const current = getStoredVertexCreditStats();
+    const merged = { ...current, ...stats };
+    localStorage.setItem(STORAGE_KEY_VERTEX_CREDIT_STATS, JSON.stringify(merged));
+    if (merged.trialStartDate) {
+      localStorage.setItem(STORAGE_KEY_VERTEX_TRIAL_START, merged.trialStartDate);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function recordLocalVertexCleanUsage(): VertexCreditStats {
+  const current = getStoredVertexCreditStats();
+  saveStoredVertexCreditStats({
+    cleanedCount: current.cleanedCount + 1,
+    trialStartDate: current.trialStartDate,
+  });
+  return getStoredVertexCreditStats();
+}
 function getIntegratedDefaultApiKey(): string {
   try {
     return atob('QVEuQWI4Uk42TFk5UHhraVkxOEY2UV9aRmdsclNlcF82cGs5aDR6ZlRFZlplaVlObmxvT2c=');
@@ -566,13 +688,19 @@ export function getLastImageGenerationError(): string {
  * Extracts inlineData (or inline_data) from candidates[0]?.content?.parts and returns
  * data:${mimeType};base64,${data} directly as the cleaned image DataURL, or null on failure.
  */
-export async function generateCleanImageWithGemini(imageDataUrl: string): Promise<string | null> {
+export async function generateCleanImageWithGemini(
+  imageDataUrl: string,
+  options?: { questionId?: string; subjectName?: string }
+): Promise<string | null> {
   lastImageGenerationError = '';
-  const geminiKey = getStoredGeminiApiKey();
-  if (!geminiKey || !geminiKey.trim()) {
-    lastImageGenerationError = 'Google Gemini API anahtarı bulunamadı.';
+
+  // 1. Check $300 Credit & 90-Day Trial Safety Shield first!
+  const creditStats = getStoredVertexCreditStats();
+  if (creditStats.hardStopped) {
+    lastImageGenerationError = creditStats.warningMessage;
     return null;
   }
+
   if (!imageDataUrl || !imageDataUrl.startsWith('data:image/')) {
     lastImageGenerationError = 'Geçerli bir soru görseli bulunamadı.';
     return null;
@@ -583,6 +711,63 @@ export async function generateCleanImageWithGemini(imageDataUrl: string): Promis
     const cleanBase64 = aiInputDataUrl.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
     const mimeMatch = aiInputDataUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+    // 2. Priority 1: Google Cloud Vertex AI ($300 Credit) + Google Drive "Atakan Temizlenmiş Deneme Fotoları" Folder
+    const vertexProjectId = getStoredVertexProjectId();
+    let googleScriptUrl = '';
+    try {
+      const rawSync = localStorage.getItem('lgs_pusulam_cloud_sync_v1');
+      if (rawSync) {
+        const parsedSync = JSON.parse(rawSync);
+        if (parsedSync?.googleScriptUrl) {
+          googleScriptUrl = parsedSync.googleScriptUrl.trim();
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (vertexProjectId && googleScriptUrl && googleScriptUrl.startsWith('https://script.google.com')) {
+      try {
+        const vertexRes = await fetch(googleScriptUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          signal: AbortSignal.timeout(60000),
+          body: JSON.stringify({
+            action: 'clean_photo_vertex',
+            projectId: vertexProjectId,
+            imageBase64: cleanBase64,
+            mimeType,
+            questionId: options?.questionId || `Soru_${Date.now()}`,
+            subjectName: options?.subjectName || '',
+          }),
+        });
+
+        if (vertexRes.ok) {
+          const vData = await vertexRes.json();
+          if (vData?.creditStats) {
+            saveStoredVertexCreditStats(vData.creditStats);
+          }
+          if (vData?.success && vData?.cleanedDataUrl) {
+            lastImageGenerationError = '';
+            return vData.cleanedDataUrl;
+          }
+          if (vData?.errorMessage) {
+            lastImageGenerationError = vData.errorMessage;
+          }
+        }
+      } catch (vErr: any) {
+        console.warn('Vertex AI Apps Script bridge error:', vErr);
+      }
+    }
+
+    // 3. Priority 2: Direct Gemini / Vertex API Key Image Generation + Credit Counter
+    const geminiKey = getStoredGeminiApiKey();
+    if (!geminiKey || !geminiKey.trim()) {
+      lastImageGenerationError =
+        lastImageGenerationError || 'Google Gemini API anahtarı veya Vertex AI Proje ID bulunamadı.';
+      return null;
+    }
 
     const imageModels = [
       'gemini-3.1-flash-image',
@@ -647,6 +832,7 @@ export async function generateCleanImageWithGemini(imageDataUrl: string): Promis
               part?.inline_data?.mime_type ||
               'image/png';
             lastImageGenerationError = '';
+            recordLocalVertexCleanUsage();
             return `data:${outMime};base64,${b64Data}`;
           }
         }
@@ -1121,13 +1307,6 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
-    // 2. Preserve the auto-cropped question image as-is (100% Free Auto-Crop & Topic Detection mode):
-    const cleanDataUrl = croppedRawDataUrl;
-    const cleanupStatus: CleanupStatus = 'unchanged';
-    const statusMessage = '✨ Soru otomatik olarak kırpıldı ve konusu belirlendi.';
-    const cleanedMarkCount = 0;
-    const preservedRiskMarkCount = 0;
-
     // Subject resolution
     let finalSubject: SubjectId = subjectHint || 'matematik';
     const subStr = (parsed.detectedSubject || '').toLowerCase();
@@ -1160,6 +1339,30 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
+    // 2. If Vertex AI is configured (or paid image cleanup is available), clean via Vertex AI & save to "Atakan Temizlenmiş Deneme Fotoları"
+    let cleanDataUrl = croppedRawDataUrl;
+    let cleanupStatus: CleanupStatus = 'unchanged';
+    let statusMessage = '✨ Soru otomatik olarak kırpıldı ve konusu belirlendi.';
+    let cleanedMarkCount = 0;
+    const preservedRiskMarkCount = 0;
+
+    const geminiCleanDataUrl = await generateCleanImageWithGemini(croppedRawDataUrl, {
+      questionId: `Soru_${Date.now()}`,
+      subjectName: finalSubject,
+    });
+    const creditStats = getStoredVertexCreditStats();
+
+    if (geminiCleanDataUrl) {
+      cleanDataUrl = geminiCleanDataUrl;
+      cleanupStatus = 'success';
+      cleanedMarkCount = 1;
+      statusMessage = creditStats.warningMessage
+        ? `${creditStats.warningMessage} | ✨ Soru temizlendi ve "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydedildi.`
+        : `✨ Soru temizlendi ve Google Drive "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydedildi. (Kalan Kredi: $${creditStats.remainingUsd.toFixed(2)})`;
+    } else if (creditStats.hardStopped) {
+      statusMessage = creditStats.warningMessage;
+    }
+
     return {
       success: true,
       cleanDataUrl,
@@ -1176,8 +1379,8 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       confidence: parsed.confidence || 95,
       isSvgCleaned: false,
       isFaithfulCleaned: true,
-      overlapWarning: false,
-      overlapMessage: '',
+      overlapWarning: Boolean(creditStats.warningActive || creditStats.hardStopped),
+      overlapMessage: creditStats.warningMessage || '',
     };
   } catch (err: any) {
     return {

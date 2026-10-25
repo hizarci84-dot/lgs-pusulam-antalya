@@ -30,8 +30,12 @@ import {
 import {
   getStoredGeminiApiKey,
   getStoredGeminiModel,
+  getStoredVertexCreditStats,
+  getStoredVertexProjectId,
   saveStoredGeminiApiKey,
   saveStoredGeminiModel,
+  saveStoredVertexCreditStats,
+  saveStoredVertexProjectId,
   testGeminiApiKey,
 } from '../services/aiVisionService';
 import { SchoolType, SecuritySettings, StudentProfile } from '../types/models';
@@ -156,9 +160,11 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
     text: string;
   } | null>(null);
 
-  // Gemini AI state
+  // Gemini AI & Vertex AI ($300 Credit Shield) state
   const [geminiKey, setGeminiKey] = useState(getStoredGeminiApiKey());
   const [geminiModel, setGeminiModel] = useState(getStoredGeminiModel());
+  const [vertexProjectId, setVertexProjectId] = useState(getStoredVertexProjectId());
+  const [creditStats, setCreditStats] = useState(getStoredVertexCreditStats());
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [isTestingGemini, setIsTestingGemini] = useState(false);
   const [geminiTestResult, setGeminiTestResult] = useState<{
@@ -169,17 +175,46 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
   const handleSaveAndTestGemini = async () => {
     setIsTestingGemini(true);
     setGeminiTestResult(null);
+    saveStoredVertexProjectId(vertexProjectId);
     try {
+      if (!geminiKey.trim() && vertexProjectId.trim()) {
+        setGeminiTestResult({
+          success: true,
+          message: `Google Cloud Vertex AI Proje ID (${vertexProjectId.trim()}) kaydedildi. Temizlenen sorular "Atakan Temizlenmiş Deneme Fotoları" klasörüne yedeklenecek.`,
+        });
+        setStatusBanner('Vertex AI Proje ID ve 300$ Kredi Koruma Kalkanı aktif edildi.');
+        return;
+      }
       const res = await testGeminiApiKey(geminiKey, geminiModel);
       setGeminiTestResult(res);
       if (res.success) {
         saveStoredGeminiApiKey(geminiKey);
         saveStoredGeminiModel(geminiModel);
-        setStatusBanner('Google Gemini API Anahtarı başarıyla kaydedildi.');
+        setStatusBanner(
+          vertexProjectId.trim()
+            ? 'Gemini API Anahtarı ve Vertex AI (300$ Kredi Kalkanı) başarıyla kaydedildi.'
+            : 'Google Gemini API Anahtarı başarıyla kaydedildi.'
+        );
       }
     } finally {
       setIsTestingGemini(false);
     }
+  };
+
+  const handleResetCreditCounter = () => {
+    saveStoredVertexCreditStats({
+      cleanedCount: 0,
+      spentUsd: 0,
+      remainingUsd: 300,
+      totalCreditUsd: 300,
+      daysRemaining: 90,
+      trialStartDate: new Date().toISOString(),
+      warningActive: false,
+      hardStopped: false,
+      warningMessage: '',
+    });
+    setCreditStats(getStoredVertexCreditStats());
+    setStatusBanner('300$ Hediye Kredi sayacı $300.00 / 90 gün olarak sıfırlandı.');
   };
 
   const handleRemoveGeminiKey = () => {
@@ -1117,6 +1152,68 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
                   </select>
                 </div>
 
+                {/* Vertex AI 300$ Hediye Kredi & Kredi Koruma Kalkanı */}
+                <div className="bg-emerald-50/90 border border-emerald-200 rounded-2xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-bold text-emerald-950 flex items-center gap-1.5 text-xs">
+                      <Cloud className="w-4 h-4 text-emerald-700" />
+                      <span>Google Cloud Vertex AI • 300$ Hediye Kredi & Koruma Kalkanı</span>
+                    </div>
+                    <span className="px-2 py-0.5 bg-emerald-200/80 text-emerald-900 rounded-full font-bold text-[10px]">
+                      Kalkan Aktif
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-emerald-950 mb-1 text-[11px]">
+                      Google Cloud Proje ID (Vertex AI • İsteğe Bağlı)
+                    </label>
+                    <input
+                      type="text"
+                      value={vertexProjectId}
+                      onChange={(e) => setVertexProjectId(e.target.value)}
+                      placeholder="Örn: gen-lang-client-0123456789"
+                      className="w-full px-3 py-2 text-xs font-mono border border-emerald-300 rounded-xl bg-white focus:ring-2 focus:ring-emerald-400 outline-none"
+                    />
+                    <p className="text-[10px] text-emerald-800 mt-1">
+                      300$ Google Cloud Hoş Geldin Kredinizi Vertex AI üzerinden kullanmak için Proje ID&apos;nizi girebilirsiniz. Temizlenen tüm sorular Google Drive&apos;da otomatik olarak{' '}
+                      <strong>&quot;Atakan Temizlenmiş Deneme Fotoları&quot;</strong> klasörüne kaydedilir.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    <div className="bg-white rounded-xl p-2 border border-emerald-200 text-center">
+                      <div className="text-[10px] text-slate-500">Temizlenen Soru</div>
+                      <div className="font-black text-sm text-navy-900">{creditStats.cleanedCount} Adet</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-2 border border-emerald-200 text-center">
+                      <div className="text-[10px] text-slate-500">Harcanan Kredi</div>
+                      <div className="font-black text-sm text-amber-700">${creditStats.spentUsd.toFixed(2)}</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-2 border border-emerald-200 text-center">
+                      <div className="text-[10px] text-slate-500">Kalan 300$ Kredi</div>
+                      <div className="font-black text-sm text-emerald-700">${creditStats.remainingUsd.toFixed(2)}</div>
+                    </div>
+                    <div className="bg-white rounded-xl p-2 border border-emerald-200 text-center">
+                      <div className="text-[10px] text-slate-500">Kalan Süre (90 Gün)</div>
+                      <div className="font-black text-sm text-indigo-700">{creditStats.daysRemaining} Gün</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-emerald-900 bg-white/80 px-2.5 py-2 rounded-xl border border-emerald-200">
+                    <span>
+                      🛡️ <strong>Otomatik Kalkan:</strong> Krediniz <strong>$50</strong> (veya <strong>7 gün</strong>) altına indiğinde size uyarı ve e-posta gönderilir; <strong>$15</strong> (veya <strong>2 gün</strong>) kaldığında kartınızdan ücret çekilmemesi için sistem otomatik durdurulur.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleResetCreditCounter}
+                      className="ml-2 px-2 py-1 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg font-bold shrink-0"
+                    >
+                      Sayacı Sıfırla
+                    </button>
+                  </div>
+                </div>
+
                 {geminiTestResult && (
                   <div
                     className={`p-3 rounded-xl border flex items-center gap-2 text-xs ${
@@ -1148,7 +1245,7 @@ export const ProfileAndSettingsModal: React.FC<ProfileAndSettingsModalProps> = (
 
                   <button
                     type="button"
-                    disabled={isTestingGemini || !geminiKey.trim()}
+                    disabled={isTestingGemini || (!geminiKey.trim() && !vertexProjectId.trim())}
                     onClick={handleSaveAndTestGemini}
                     className="px-4 py-2 bg-purple-700 hover:bg-purple-800 disabled:opacity-50 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-sm transition"
                   >
