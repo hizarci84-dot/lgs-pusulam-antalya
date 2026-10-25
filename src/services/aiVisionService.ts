@@ -17,14 +17,14 @@ function getIntegratedDefaultApiKey(): string {
   }
 }
 
-export const DEFAULT_MODEL = 'gemini-2.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-image',
-  'gemini-3-flash-preview',
+  'gemini-3.8-flash',
+  'gemini-3.5-flash',
   'gemini-flash-latest',
-  'gemini-2.5-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
 ];
 
@@ -57,10 +57,16 @@ export function saveStoredGeminiApiKey(key: string): void {
 export function getStoredGeminiModel(): string {
   try {
     const saved = localStorage.getItem(STORAGE_KEY_MODEL)?.trim();
-    if (saved && (saved === 'gemini-2.5-flash' || saved === 'gemini-2.5-flash-image')) {
+    if (
+      saved &&
+      (saved === 'gemini-3.8-flash' ||
+        saved === 'gemini-3.5-flash' ||
+        saved === 'gemini-flash-latest' ||
+        saved === 'gemini-3-flash-preview')
+    ) {
       return saved;
     }
-    // Auto-upgrade to high-precision gemini-2.5-flash
+    // Auto-migrate retired gemini-2.5-flash / gemini-2.0-flash to gemini-3.8-flash
     saveStoredGeminiModel(DEFAULT_MODEL);
     return DEFAULT_MODEL;
   } catch {
@@ -129,25 +135,40 @@ export async function testGeminiApiKey(
     return { success: false, message: 'Lütfen bir API anahtarı girin.' };
   }
 
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: 'Merhaba! Kısa yanıt ver: Bağlantı başarılı de.' }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 20,
-        },
-      }),
-    });
+  const modelsToTry = [
+    model === 'gemini-2.5-flash' || model === 'gemini-2.0-flash' ? DEFAULT_MODEL : model,
+    ...CANDIDATE_MODELS,
+  ];
+  const uniqueModels = Array.from(new Set(modelsToTry));
+  let lastErrorMsg = '';
 
-    if (!response.ok) {
+  for (const currentModel of uniqueModels) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${cleanKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: 'Merhaba! Kısa yanıt ver: Bağlantı başarılı de.' }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            maxOutputTokens: 20,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        saveStoredGeminiModel(currentModel);
+        return {
+          success: true,
+          message: `✅ Google Gemini Yapay Zekâ bağlantısı (${currentModel}) başarıyla doğrulandı!`,
+        };
+      }
+
       const errText = await response.text();
       let parsedMsg = `Hata kodu: ${response.status}`;
       try {
@@ -158,22 +179,16 @@ export async function testGeminiApiKey(
       } catch {
         // use raw text preview
       }
-      return {
-        success: false,
-        message: `API Anahtarı geçersiz veya yetkisiz (${parsedMsg})`,
-      };
+      lastErrorMsg = parsedMsg;
+    } catch (err: any) {
+      lastErrorMsg = err?.message || 'İnternet bağlantınızı kontrol edin.';
     }
-
-    return {
-      success: true,
-      message: '✅ Google Gemini Yapay Zekâ bağlantısı başarıyla doğrulandı!',
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      message: `Bağlantı kurulamadı: ${err?.message || 'İnternet bağlantınızı kontrol edin.'}`,
-    };
   }
+
+  return {
+    success: false,
+    message: `API Anahtarı geçersiz veya yetkisiz (${lastErrorMsg})`,
+  };
 }
 
 export interface TopicDetectionResult {
@@ -570,11 +585,12 @@ export async function generateCleanImageWithGemini(imageDataUrl: string): Promis
     const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
 
     const imageModels = [
-      'gemini-2.0-flash-exp-image-generation',
+      'gemini-3.1-flash-image',
+      'gemini-3.1-flash-image-preview',
+      'gemini-3.1-flash-lite-image',
       'gemini-2.5-flash-image',
-      'gemini-2.5-flash-image-preview',
-      'gemini-2.0-flash-preview-image-generation',
       'gemini-3-pro-image-preview',
+      'gemini-2.0-flash-exp-image-generation',
     ];
 
     for (const currentModel of imageModels) {
