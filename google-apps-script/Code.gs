@@ -71,6 +71,19 @@ function doPost(e) {
       });
     }
 
+    // 2.5 VERTEX OAUTH TOKEN KURULUMU (ScriptProperties içine güvenli kayıt)
+    if (action === 'setup_vertex_oauth') {
+      var props = PropertiesService.getScriptProperties();
+      if (data.clientId) props.setProperty('VERTEX_OAUTH_CLIENT_ID', data.clientId);
+      if (data.clientSecret) props.setProperty('VERTEX_OAUTH_CLIENT_SECRET', data.clientSecret);
+      if (data.refreshToken) props.setProperty('VERTEX_OAUTH_REFRESH_TOKEN', data.refreshToken);
+      if (data.projectId) props.setProperty('VERTEX_GCP_PROJECT_ID', data.projectId);
+      return responseJson({
+        success: true,
+        message: 'Vertex AI OAuth kimlik bilgileri güvenli ScriptProperties deposuna kaydedildi.'
+      });
+    }
+
     // 3. VERTEX AI İLE SORU TEMİZLEME VE "Atakan Temizlenmiş Deneme Fotoları" KLASÖRÜNE KAYDETME
     if (action === 'clean_photo_vertex') {
       var projectId = (data.projectId || DEFAULT_GCP_PROJECT_ID).trim();
@@ -286,6 +299,50 @@ function saveSinglePhotoToCleanFolder(base64Data, mimeType, questionId, subjectN
 }
 
 /**
+ * ScriptProperties içinde kayıtlı OAuth Refresh Token ile Vertex AI Bearer Token üretir
+ */
+function getVertexOAuthAccessToken() {
+  var props = PropertiesService.getScriptProperties();
+  var cachedToken = props.getProperty('VERTEX_CACHED_ACCESS_TOKEN');
+  var cachedExpiry = parseInt(props.getProperty('VERTEX_CACHED_TOKEN_EXPIRY') || '0', 10);
+  var nowMs = new Date().getTime();
+  if (cachedToken && nowMs < cachedExpiry) {
+    return cachedToken;
+  }
+
+  var clientId = props.getProperty('VERTEX_OAUTH_CLIENT_ID');
+  var clientSecret = props.getProperty('VERTEX_OAUTH_CLIENT_SECRET');
+  var refreshToken = props.getProperty('VERTEX_OAUTH_REFRESH_TOKEN');
+  if (!clientId || !clientSecret || !refreshToken) {
+    return '';
+  }
+
+  try {
+    var tokenRes = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+      method: 'post',
+      payload: {
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token'
+      },
+      muteHttpExceptions: true
+    });
+    if (tokenRes.getResponseCode() === 200) {
+      var tokenData = JSON.parse(tokenRes.getContentText());
+      if (tokenData.access_token) {
+        props.setProperty('VERTEX_CACHED_ACCESS_TOKEN', tokenData.access_token);
+        props.setProperty('VERTEX_CACHED_TOKEN_EXPIRY', String(nowMs + 45 * 60 * 1000));
+        return tokenData.access_token;
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+  return '';
+}
+
+/**
  * Vertex AI üzerinden görsel temizleme ve "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydetme
  */
 function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questionId, subjectName) {
@@ -315,33 +372,37 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questi
     subjectName
   );
 
+  var props = PropertiesService.getScriptProperties();
+  var gcpProject = props.getProperty('VERTEX_GCP_PROJECT_ID') || projectId || 'gen-lang-client-0553886215';
+  var oauthToken = getVertexOAuthAccessToken();
   var keyToUse = apiKey || getDefaultVertexKey();
-  var endpoints = [
-    {
-      name: 'vertex-express-gemini-2.5-flash-image',
+
+  var endpoints = [];
+  if (oauthToken) {
+    endpoints.push({
+      name: 'vertex-oauth-gemini-2.5-flash-image',
       url:
-        'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash-image:generateContent?key=' +
-        encodeURIComponent(keyToUse)
-    },
-    {
-      name: 'vertex-express-gemini-3.1-flash-image-preview',
+        'https://us-central1-aiplatform.googleapis.com/v1/projects/' +
+        encodeURIComponent(gcpProject) +
+        '/locations/us-central1/publishers/google/models/gemini-2.5-flash-image:generateContent',
+      bearer: oauthToken
+    });
+    endpoints.push({
+      name: 'vertex-oauth-global-gemini-2.5-flash-image',
       url:
-        'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-image-preview:generateContent?key=' +
-        encodeURIComponent(keyToUse)
-    },
-    {
-      name: 'gemini-api-2.5-flash-image',
-      url:
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=' +
-        encodeURIComponent(keyToUse)
-    },
-    {
-      name: 'gemini-api-3.1-flash-image-preview',
-      url:
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=' +
-        encodeURIComponent(keyToUse)
-    }
-  ];
+        'https://aiplatform.googleapis.com/v1/projects/' +
+        encodeURIComponent(gcpProject) +
+        '/locations/global/publishers/google/models/gemini-2.5-flash-image:generateContent',
+      bearer: oauthToken
+    });
+  }
+  endpoints.push({
+    name: 'gemini-api-2.5-flash-image',
+    url:
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=' +
+      encodeURIComponent(keyToUse),
+    bearer: ''
+  });
 
   var lastErr = '';
 
@@ -369,12 +430,17 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questi
         }
       };
 
-      var response = UrlFetchApp.fetch(ep.url, {
+      var fetchOpts = {
         method: 'post',
         contentType: 'application/json',
         payload: JSON.stringify(payload),
         muteHttpExceptions: true
-      });
+      };
+      if (ep.bearer) {
+        fetchOpts.headers = { Authorization: 'Bearer ' + ep.bearer };
+      }
+
+      var response = UrlFetchApp.fetch(ep.url, fetchOpts);
 
       var code = response.getResponseCode();
       var bodyText = response.getContentText();
