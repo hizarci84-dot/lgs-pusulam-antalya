@@ -273,18 +273,13 @@ export const QuestionDetailModal: React.FC<QuestionDetailModalProps> = ({
             ...activePhoto,
             croppedDataUrl: cleanRes.cleanDataUrl,
           });
-          if (cleanRes.cleanupStatus === 'success') {
-            setSaveBanner('✨ Soru fotoğrafındaki karalamalar ve kurşun kalem izleri başarıyla temizlendi ve kaydedildi!');
-          } else if (cleanRes.cleanupStatus === 'partial') {
-            setSaveBanner('⚠️ ' + (cleanRes.overlapMessage || 'Kısmi temizleme yapıldı. Basılı alanlar korundu; kalan kısımları Daksil ile silebilirsiniz.'));
-          } else if (cleanRes.cleanupStatus === 'manual_needed') {
-            setSaveBanner('🔍 ' + (cleanRes.statusMessage || 'Karalamalar basılı metin veya formülle yoğun çakıştığı için silinmedi. Daksil ile temizleyebilirsiniz.'));
-          } else {
-            setSaveBanner('Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.');
-          }
+          setSaveBanner('✨ Soru fotoğrafındaki karalamalar ve kurşun kalem izleri başarıyla temizlendi ve kaydedildi!');
           return;
         } else {
-          setSaveBanner('Fotoğraf yapay zekâ ile temizlenemedi; soru orijinal haliyle korundu.');
+          setSaveBanner(
+            '⚠️ Görsel temizlenemedi (Orijinal görüntü korundu): ' +
+              (cleanRes.errorMessage || cleanRes.statusMessage || 'Bilinmeyen hata')
+          );
           return;
         }
       } else {

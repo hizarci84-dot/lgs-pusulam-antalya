@@ -604,28 +604,34 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl;
       const cleanRes = await cleanCroppedQuestionImage(src, capturedPreview.subjectId || batchSubjectId);
       if (cleanRes.success && cleanRes.cleanDataUrl) {
-        const hasCleanOutput =
-          (cleanRes.cleanupStatus === 'success' || cleanRes.cleanupStatus === 'partial') &&
-          Boolean(cleanRes.cleanDataUrl);
         setCapturedPreview({
           ...capturedPreview,
-          dataUrl: hasCleanOutput ? cleanRes.cleanDataUrl : (capturedPreview.rawOriginalDataUrl || src),
+          dataUrl: cleanRes.cleanDataUrl,
           cleanDataUrl: cleanRes.cleanDataUrl,
           rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || src,
-          isCleaned: hasCleanOutput,
-          cleanupStatus: cleanRes.cleanupStatus,
+          isCleaned: true,
+          cleanupStatus: 'success',
           statusMessage: cleanRes.statusMessage,
           cleanedMarkCount: cleanRes.cleanedMarkCount,
-          preservedRiskMarkCount: cleanRes.preservedRiskMarkCount,
-          overlapWarning: cleanRes.overlapWarning,
-          overlapMessage: cleanRes.overlapMessage,
+          preservedRiskMarkCount: 0,
+          overlapWarning: false,
+          overlapMessage: '',
           topicName: cleanRes.detectedTopicName || capturedPreview.topicName,
           subtopicName: cleanRes.detectedSubtopicName || capturedPreview.subtopicName,
         });
       } else {
+        setCapturedPreview({
+          ...capturedPreview,
+          dataUrl: capturedPreview.rawOriginalDataUrl || src,
+          rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || src,
+          isCleaned: false,
+          cleanupStatus: 'manual_needed',
+          statusMessage: cleanRes.statusMessage,
+        });
         setErrorMsg(
           cleanRes.errorMessage ||
-            'Yapay zekâ yanıt veremedi. Telefonunuzdaki Gemini uygulamasında temizlediğiniz görseli kopyalayıp yeşil "📋 Panodan Yapıştır" butonuna basarak anında aktarabilirsiniz.'
+            cleanRes.statusMessage ||
+            'Görsel temizlenemedi; orijinal kırpılmış görüntü bozulmadan korundu.'
         );
       }
     } catch (err: any) {
@@ -646,24 +652,21 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const src = item.rawOriginalDataUrl || item.dataUrl;
       const res = await cleanCroppedQuestionImage(src, item.subjectId);
       if (res.success && res.cleanDataUrl) {
-        const hasCleanOutput =
-          (res.cleanupStatus === 'success' || res.cleanupStatus === 'partial') &&
-          Boolean(res.cleanDataUrl);
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
               ? {
                   ...p,
-                  dataUrl: hasCleanOutput ? res.cleanDataUrl : (p.rawOriginalDataUrl || src),
+                  dataUrl: res.cleanDataUrl,
                   cleanDataUrl: res.cleanDataUrl,
                   rawOriginalDataUrl: p.rawOriginalDataUrl || src,
-                  isCleaned: hasCleanOutput,
-                  cleanupStatus: res.cleanupStatus,
+                  isCleaned: true,
+                  cleanupStatus: 'success',
                   statusMessage: res.statusMessage,
                   cleanedMarkCount: res.cleanedMarkCount,
-                  preservedRiskMarkCount: res.preservedRiskMarkCount,
-                  overlapWarning: res.overlapWarning,
-                  overlapMessage: res.overlapMessage,
+                  preservedRiskMarkCount: 0,
+                  overlapWarning: false,
+                  overlapMessage: '',
                   topicId: res.topicId || p.topicId,
                   subtopicName: res.subtopicName || p.subtopicName,
                 }
@@ -681,9 +684,24 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           }));
         }
       } else {
+        setStagedItems((prev) =>
+          prev.map((p) =>
+            p.tempId === item.tempId
+              ? {
+                  ...p,
+                  dataUrl: p.rawOriginalDataUrl || src,
+                  rawOriginalDataUrl: p.rawOriginalDataUrl || src,
+                  isCleaned: false,
+                  cleanupStatus: 'manual_needed',
+                  statusMessage: res.statusMessage,
+                }
+              : p
+          )
+        );
         setErrorMsg(
           res.errorMessage ||
-            'Yapay zekâ temizleme yapamadı. Gemini uygulamasından temizlediğiniz görseli kopyalayıp yeşil "Panodan Yapıştır" butonunu kullanabilirsiniz.'
+            res.statusMessage ||
+            'Görsel temizlenemedi; orijinal kırpılmış görüntü bozulmadan korundu.'
         );
       }
     } catch (err: any) {
@@ -915,13 +933,23 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           if (cleanRes.success && cleanRes.cleanDataUrl) {
             cleaned = cleanRes.cleanDataUrl;
           } else {
-            cleaned = src;
+            setErrorMsg(
+              cleanRes.errorMessage ||
+                cleanRes.statusMessage ||
+                'Yapay zekâ temizlenmiş görsel döndürmedi; orijinal kırpılmış görüntü korundu.'
+            );
+            return;
           }
         }
         setStagedItems((prev) =>
           prev.map((p) =>
             p.tempId === item.tempId
-              ? { ...p, dataUrl: cleaned!, cleanDataUrl: cleaned!, isCleaned: Boolean(cleaned && cleaned !== (p.rawOriginalDataUrl || p.dataUrl)) }
+              ? {
+                  ...p,
+                  dataUrl: cleaned!,
+                  cleanDataUrl: cleaned!,
+                  isCleaned: Boolean(cleaned && cleaned !== (p.rawOriginalDataUrl || p.dataUrl)),
+                }
               : p
           )
         );
