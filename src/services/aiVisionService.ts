@@ -1121,37 +1121,12 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       }
     }
 
-    // 2. Multimodal Image-to-Image Cleanup (No destructive pixel painting fallback):
-    let cleanDataUrl = croppedRawDataUrl;
-    let cleanupStatus: CleanupStatus = 'unchanged';
-    let statusMessage = 'Fotoğrafta temizlenecek karalama bulunamadı; soru orijinal haliyle hazır.';
-    let cleanedMarkCount = 0;
-    let preservedRiskMarkCount = 0;
-
-    const rawMarks: any[] =
-      Array.isArray(parsed.handwritten_marks) && parsed.handwritten_marks.length > 0
-        ? parsed.handwritten_marks
-        : Array.isArray(parsed.handwritten_marks_boxes)
-        ? parsed.handwritten_marks_boxes
-        : [];
-
-    const geminiCleanDataUrl = await generateCleanImageWithGemini(croppedRawDataUrl);
-    const imgError = lastImageGenerationError || 'Görsel temizleme modeli (inlineData) yanıt döndürmedi.';
-
-    if (geminiCleanDataUrl) {
-      cleanDataUrl = geminiCleanDataUrl;
-      cleanupStatus = 'success';
-      statusMessage = '✨ Temizleme Başarılı: Yapay zekâ ile tüm kurşun kalem karalamaları temizlendi.';
-      cleanedMarkCount = Math.max(1, rawMarks.length);
-      preservedRiskMarkCount = 0;
-    } else {
-      // Never corrupt the cropped image with pixel painting! Keep croppedRawDataUrl intact.
-      cleanDataUrl = croppedRawDataUrl;
-      if (rawMarks.length > 0) {
-        cleanupStatus = 'manual_needed';
-        statusMessage = `Görsel temizleme başarısız (${imgError}). Orijinal kırpılmış görüntü bozulmadan korundu.`;
-      }
-    }
+    // 2. Preserve the auto-cropped question image as-is (100% Free Auto-Crop & Topic Detection mode):
+    const cleanDataUrl = croppedRawDataUrl;
+    const cleanupStatus: CleanupStatus = 'unchanged';
+    const statusMessage = '✨ Soru otomatik olarak kırpıldı ve konusu belirlendi.';
+    const cleanedMarkCount = 0;
+    const preservedRiskMarkCount = 0;
 
     // Subject resolution
     let finalSubject: SubjectId = subjectHint || 'matematik';
@@ -1201,9 +1176,8 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       confidence: parsed.confidence || 95,
       isSvgCleaned: false,
       isFaithfulCleaned: true,
-      overlapWarning: Boolean(parsed.overlap_warning),
-      overlapMessage: parsed.overlap_message || '',
-      errorMessage: !geminiCleanDataUrl ? imgError : undefined,
+      overlapWarning: false,
+      overlapMessage: '',
     };
   } catch (err: any) {
     return {

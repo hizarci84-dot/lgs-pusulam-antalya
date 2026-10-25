@@ -151,16 +151,17 @@ function savePhotosToDriveFolder(photoFolder, photoAssets) {
     if (!dataUrl || dataUrl.indexOf('base64,') === -1) continue;
     
     var fileName = 'Soru_' + (p.questionId || p.id) + '.jpg';
-    var existing = photoFolder.getFilesByName(fileName);
-    if (!existing.hasNext()) {
-      try {
-        var base64 = dataUrl.split('base64,')[1];
-        var decoded = Utilities.base64Decode(base64);
-        var blob = Utilities.newBlob(decoded, 'image/jpeg', fileName);
-        photoFolder.createFile(blob);
-      } catch (e) {
-        // Devam et
+    try {
+      var base64 = dataUrl.split('base64,')[1];
+      var decoded = Utilities.base64Decode(base64);
+      var blob = Utilities.newBlob(decoded, 'image/jpeg', fileName);
+      var existing = photoFolder.getFilesByName(fileName);
+      while (existing.hasNext()) {
+        existing.next().setTrashed(true);
       }
+      photoFolder.createFile(blob);
+    } catch (e) {
+      // Devam et
     }
   }
 }
