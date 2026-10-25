@@ -149,11 +149,73 @@ export const DEFAULT_MODEL = 'gemini-3.8-flash';
 export const CANDIDATE_MODELS = [
   'gemini-3.8-flash',
   'gemini-3.5-flash',
+  'gemini-2.5-flash',
   'gemini-flash-latest',
   'gemini-3-flash-preview',
   'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
 ];
+
+async function fetchGeminiOrVertexGenerateContent(
+  model: string,
+  apiKey: string,
+  bodyPayload: Record<string, any>
+): Promise<Response> {
+  const cleanKey = apiKey.trim();
+  const normalizedContents = Array.isArray(bodyPayload.contents)
+    ? bodyPayload.contents.map((c: any) => ({
+        role: c.role || 'user',
+        parts: Array.isArray(c.parts)
+          ? c.parts.map((p: any) => {
+              if (p.inline_data) {
+                return {
+                  inlineData: {
+                    mimeType: p.inline_data.mime_type || p.inline_data.mimeType || 'image/jpeg',
+                    data: p.inline_data.data,
+                  },
+                };
+              }
+              return p;
+            })
+          : c.parts,
+      }))
+    : bodyPayload.contents;
+
+  const vertexPayload = {
+    ...bodyPayload,
+    contents: normalizedContents,
+  };
+
+  const vertexUrl = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+
+  // 1. Try Vertex AI (Agent Platform API - uses $300 Welcome Credit)
+  try {
+    const vRes = await fetch(vertexUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(60000),
+      body: JSON.stringify(vertexPayload),
+    });
+    if (vRes.ok) {
+      return vRes;
+    }
+    // If key is restricted to Gemini API (403 API_KEY_SERVICE_BLOCKED) or model is Gemini-API-only (404), fall through to Gemini API
+    if (vRes.status !== 403 && vRes.status !== 404 && vRes.status !== 400) {
+      return vRes;
+    }
+  } catch {
+    // Fall through to Gemini API
+  }
+
+  // 2. Fallback to Gemini API (generativelanguage.googleapis.com)
+  return fetch(geminiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(60000),
+    body: JSON.stringify(bodyPayload),
+  });
+}
 
 export function getStoredGeminiApiKey(): string {
   try {
@@ -271,21 +333,17 @@ export async function testGeminiApiKey(
 
   for (const currentModel of uniqueModels) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${cleanKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: 'Merhaba! Kısa yanıt ver: Bağlantı başarılı de.' }],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.1,
-            maxOutputTokens: 20,
+      const response = await fetchGeminiOrVertexGenerateContent(currentModel, cleanKey, {
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: 'Merhaba! Kısa yanıt ver: Bağlantı başarılı de.' }],
           },
-        }),
+        ],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 20,
+        },
       });
 
       if (response.ok) {
@@ -395,31 +453,25 @@ Eğer soru görseli çok karanlık, bulanık veya okunamıyorsa:
 
     for (const currentModel of modelsToTry) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: systemPrompt },
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: cleanBase64,
-                    },
+        const response = await fetchGeminiOrVertexGenerateContent(currentModel, apiKey, {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: systemPrompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: cleanBase64,
                   },
-                ],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.1,
-              responseMimeType: 'application/json',
-              thinkingConfig: { thinkingBudget: 1 },
+                },
+              ],
             },
-          }),
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
         });
 
         if (!response.ok) {
@@ -572,31 +624,25 @@ Eğer soru görseli okunamıyorsa:
 
     for (const currentModel of modelsToTry) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: systemPrompt },
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: cleanBase64,
-                    },
+        const response = await fetchGeminiOrVertexGenerateContent(currentModel, apiKey, {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: systemPrompt },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: cleanBase64,
                   },
-                ],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.2,
-              responseMimeType: 'application/json',
-              thinkingConfig: { thinkingBudget: 1 },
+                },
+              ],
             },
-          }),
+          ],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+          },
         });
 
         if (!response.ok) {
@@ -786,30 +832,25 @@ export async function generateCleanImageWithGemini(
 
     for (const currentModel of imageModels) {
       try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(60000),
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  { text: AI_IMAGE_CLEANUP_SYSTEM_PROMPT },
-                  {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: cleanBase64,
-                    },
+        const response = await fetchGeminiOrVertexGenerateContent(currentModel, geminiKey.trim(), {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: AI_IMAGE_CLEANUP_SYSTEM_PROMPT },
+                {
+                  inline_data: {
+                    mime_type: mimeType,
+                    data: cleanBase64,
                   },
-                ],
-              },
-            ],
-            generationConfig: {
-              responseModalities: ['TEXT', 'IMAGE'],
-              temperature: 0.1,
+                },
+              ],
             },
-          }),
+          ],
+          generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
+            temperature: 0.1,
+          },
         });
 
         if (!response.ok) {
@@ -1198,31 +1239,25 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 
       for (const currentModel of modelsToTry) {
         try {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiKey.trim()}`;
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(60000),
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: prompt },
-                    {
-                      inline_data: {
-                        mime_type: mimeType,
-                        data: cleanBase64,
-                      },
+          const response = await fetchGeminiOrVertexGenerateContent(currentModel, geminiKey.trim(), {
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: cleanBase64,
                     },
-                  ],
-                },
-              ],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                temperature: 0.1,
-                thinkingConfig: { thinkingBudget: 256 },
+                  },
+                ],
               },
-            }),
+            ],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.1,
+            },
           });
 
           if (!response.ok) {
