@@ -352,10 +352,10 @@ Bu soru fotoğrafını incele:
    Her bir karalama için:
    - "box_2d": [ymin, xmin, ymax, xmax] normalize koordinatları (0-1000 ölçekte; kelime dairelerinde dairenin en üst yayından en alt yayına ve sol/sağ ucuna kadar tüm halkayı kapsa).
    - "type":
-       * "safe": Kenar boşluğundaki veya boş alandaki el yazısı işlem (bölme, çarpma, çıkarma, sayı), yoğun karalama veya çizim üzerindeki iz (basılı soru cümlesiyle çakışmıyor).
-       * "underline": Basılı kelimelerin veya cümlelerin altına çizilmiş kurşun kalem çizgisi.
-       * "circle": Basılı bir kelimenin, sayının veya A, B, C, D şıklarından birinin etrafına çizilmiş daire/halka.
-       * "cross_out": Tablo, takvim günü veya şıkların üzerine çizilmiş X veya çapraz çizgi.
+       * "safe": YALNIZCA basılı soru metniyle, matematiksel ifadelerle (K=..., L=...) ve şıklarla HİÇ çakışmayan, kenar boşluğundaki bağımsız el yazısı işlem (bölme, çarpma, çıkarma, sayı) veya boşluktaki karalama. (Bütün sorunun üzerinden geçen büyük çizgilere ASLA "safe" deme!)
+       * "underline": Basılı kelimelerin veya cümlelerin altına çizilmiş tek satırlık kurşun kalem çizgisi.
+       * "circle": Basılı bir kelimenin, ifadenin (örn. EBOB(K,L)) veya A, B, C, D şıklarından birinin etrafına çizilmiş daire/halka.
+       * "cross_out": Soru metninin, tablonun veya şıkların üzerinden geçen büyük X, V veya çapraz karalama çizgisi.
        * "high_risk": Basılı matematik formülü veya üslü/köklü ifadenin üzeri tamamen okunamayacak kadar simsiyah kapatılmış.
    - "description": Kısa açıklama (örn: "Sağ alttaki 96/20 bölme işlemi", "Alt ortadaki yoğun karalama", "96 adet gülün etrafındaki daire", "Soru kökünün altındaki çizgi").
    DİKKAT: Matbaa basımı soru metnini, basılı matematik sembollerini, basılı renkli şekilleri ve basılı şıkları (A, B, C, D) tek başına karalama sanma. Yalnızca öğrencinin kalem izlerini listele. Karalama yoksa boş dizi [] ver.
@@ -388,6 +388,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
 
   const candidateModels = [
     process.env.GEMINI_MODEL || 'gemini-3.5-flash',
+    'gemini-3.8-flash',
     'gemini-3-flash-preview',
     'gemini-flash-latest',
     'gemini-3.5-flash-lite',

@@ -471,7 +471,19 @@ export function inpaintHandwritingRegions(
       ''
     ).toLowerCase();
 
-    const isSafeStandalone =
+    // Determine whether this box is genuinely a standalone margin mark (and NEVER a giant box over the question text!)
+    const isTinyMark = tightW <= width * 0.14 && tightH <= height * 0.08;
+    const isInRightMargin = x0Tight >= width * 0.66;
+    const isInBottomMargin = y0Tight >= height * 0.68 && x0Tight >= width * 0.42;
+    const isInOuterEdge = x1Tight <= width * 0.12 || y1Tight <= height * 0.08;
+    const isGeometricallyStandalone =
+      !isRealPhotoSize ||
+      (tightW <= width * 0.40 &&
+        tightH <= height * 0.40 &&
+        tightW * tightH <= width * height * 0.12 &&
+        (isTinyMark || isInRightMargin || isInBottomMargin || isInOuterEdge));
+
+    const rawWantsSafe =
       rawType === 'safe' ||
       rawType === 'margin_calc' ||
       rawType === 'scribble' ||
@@ -493,8 +505,13 @@ export function inpaintHandwritingRegions(
       desc.includes('yoğun karalama') ||
       desc.includes('yogun karalama');
 
+    const isSafeStandalone = rawWantsSafe && isGeometricallyStandalone;
+
+    const isSingleLineHeight = !isRealPhotoSize || tightH <= height * 0.115;
+
     const isUnderline =
       !isSafeStandalone &&
+      isSingleLineHeight &&
       (rawType === 'underline' ||
         ((desc.includes('alt') || desc.includes('cizgi') || desc.includes('çizgi') || desc.includes('underline')) &&
           !desc.includes('çapraz') &&
@@ -505,6 +522,7 @@ export function inpaintHandwritingRegions(
     const isCircle =
       !isSafeStandalone &&
       !isUnderline &&
+      isSingleLineHeight &&
       (rawType === 'circle' ||
         desc.includes('daire') ||
         desc.includes('cember') ||
@@ -886,23 +904,145 @@ export function inpaintHandwritingRegions(
         }
       }
     } else {
-      // Cross-out / general recoverable region (e.g., X marks on calendar dates or diagonal lines):
-      // Preserve deep printed ink while erasing lighter graphite pencil strokes
-      for (let py = y0Tight; py < y1Tight; py++) {
-        for (let px = x0Tight; px < x1Tight; px++) {
-          const idx = (py * width + px) * 4;
-          const r = pixels[idx];
-          const g = pixels[idx + 1];
-          const b = pixels[idx + 2];
-          if (isColoredArtwork(r, g, b)) continue;
+      // Cross-out / multi-line diagonal scribble / general recoverable region:
+      if (!isRealPhotoSize) {
+        for (let py = y0Tight; py < y1Tight; py++) {
+          for (let px = x0Tight; px < x1Tight; px++) {
+            const idx = (py * width + px) * 4;
+            const r = pixels[idx];
+            const g = pixels[idx + 1];
+            const b = pixels[idx + 2];
+            if (isColoredArtwork(r, g, b)) continue;
 
-          const l = 0.299 * r + 0.587 * g + 0.114 * b;
-          const [pr, pg, pb, plum] = interpPaper(px, py);
-          const printedInkCutoff = Math.min(80, plum * 0.48);
+            const l = 0.299 * r + 0.587 * g + 0.114 * b;
+            const [pr, pg, pb, plum] = interpPaper(px, py);
+            const printedInkCutoff = Math.min(80, plum * 0.48);
 
-          if (l >= printedInkCutoff && l < plum - 3.5) {
-            writePaperPixel(px, py, pr, pg, pb);
-            boxModified++;
+            if (l >= printedInkCutoff && l < plum - 3.5) {
+              writePaperPixel(px, py, pr, pg, pb);
+              boxModified++;
+            }
+          }
+        }
+      } else {
+        // Real camera photo with multi-line scribble / cross-out (e.g. giant V/X over question):
+        // 1. Bilateral 1D stroke-valley detector:
+        //    A thin pencil stroke (1-4px wide) has clean paper on BOTH opposite sides (p - d and p + d, d = 3..4px)
+        //    that are both brighter than the stroke pixel by >= 7 gray levels.
+        //    Averaging the two opposite sides ((rgb(p-d) + rgb(p+d)) / 2) cancels linear shadow gradients to 0 error!
+        const dirs = [
+          [4, 0],
+          [0, 4],
+          [3, 3],
+          [3, -3],
+          [3, 0],
+          [0, 3],
+        ];
+        const findBilateralPaper = (px: number, py: number, l: number): [number, number, number, number] | null => {
+          let bestDiff = -1;
+          let bestPaper: [number, number, number, number] | null = null;
+          for (let i = 0; i < dirs.length; i++) {
+            const [dx, dy] = dirs[i];
+            const x1 = px - dx;
+            const y1 = py - dy;
+            const x2 = px + dx;
+            const y2 = py + dy;
+            if (x1 < 0 || x2 >= width || y1 < 0 || y2 >= height) continue;
+            const l1 = lumFull[y1 * width + x1];
+            const l2 = lumFull[y2 * width + x2];
+            // Both opposite sides must be brighter than (px, py) by >= 7 and within 22 gray levels of each other
+            if (l1 >= l + 7 && l2 >= l + 7 && Math.abs(l1 - l2) <= 22) {
+              const avgL = 0.5 * (l1 + l2);
+              const diff = avgL - l;
+              if (diff > bestDiff) {
+                bestDiff = diff;
+                const idx1 = (y1 * width + x1) * 4;
+                const idx2 = (y2 * width + x2) * 4;
+                bestPaper = [
+                  0.5 * (pixels[idx1] + pixels[idx2]),
+                  0.5 * (pixels[idx1 + 1] + pixels[idx2 + 1]),
+                  0.5 * (pixels[idx1 + 2] + pixels[idx2 + 2]),
+                  avgL,
+                ];
+              }
+            }
+          }
+          return bestPaper;
+        };
+
+        // 2. Detect horizontal printed text rows across the image so printed words & exponents (K=2^3.3^2.5) are 100% protected
+        const rawTextRow = new Uint8Array(height);
+        const scanX0 = Math.max(0, Math.min(x0Tight, Math.round(width * 0.08)));
+        const scanX1 = Math.min(width - 1, Math.max(x1Tight, Math.round(width * 0.92)));
+        for (let py = Math.max(0, y0Tight - 3); py < Math.min(height, y1Tight + 3); py++) {
+          let charTrans = 0;
+          for (let px = scanX0; px < scanX1; px++) {
+            const l1 = lumFull[py * width + px];
+            const l2 = lumFull[py * width + px + 1];
+            if (Math.abs(l2 - l1) > 15 && Math.min(l1, l2) < medLumAll - 22) {
+              charTrans++;
+            }
+          }
+          if (charTrans >= 8) rawTextRow[py] = 1;
+        }
+        // Dilate printed text rows by ±2px vertically to protect ascenders, descenders, and superscript exponents
+        const isPrintedRow = new Uint8Array(height);
+        for (let py = 0; py < height; py++) {
+          if (
+            rawTextRow[py] ||
+            (py > 0 && rawTextRow[py - 1]) ||
+            (py > 1 && rawTextRow[py - 2]) ||
+            (py + 1 < height && rawTextRow[py + 1]) ||
+            (py + 2 < height && rawTextRow[py + 2])
+          ) {
+            isPrintedRow[py] = 1;
+          }
+        }
+
+        // 3. Clean only true bilateral pencil stroke valleys that do not belong to printed words/formulas
+        const guardDistMin = Math.max(5, Math.round(width * 0.016));
+        const guardDistMax = Math.max(14, Math.round(width * 0.045));
+
+        for (let py = y0Tight; py < y1Tight; py++) {
+          for (let px = x0Tight; px < x1Tight; px++) {
+            const idx = (py * width + px) * 4;
+            const r = pixels[idx];
+            const g = pixels[idx + 1];
+            const b = pixels[idx + 2];
+            if (isColoredArtwork(r, g, b)) continue;
+
+            const l = lumFull[py * width + px];
+            const bilateral = findBilateralPaper(px, py, l);
+            if (!bilateral) continue;
+            const [pr, pg, pb, plum] = bilateral;
+
+            // Never touch deep black printed ink (l < plum - 46)
+            if (l < plum - 46) continue;
+
+            if (!isPrintedRow[py]) {
+              // Inter-line whitespace between printed text rows: safely erase thin pencil stroke
+              writePaperPixel(px, py, pr, pg, pb);
+              boxModified++;
+            } else {
+              // On a printed text row: ONLY erase if (px, py) is a horizontally isolated diagonal pencil stroke
+              // (with empty paper in both left [px-guardDistMax..px-guardDistMin] and right [px+guardDistMin..px+guardDistMax] guard zones)
+              let leftNeighbors = 0;
+              let rightNeighbors = 0;
+              const gy0 = Math.max(0, py - 2);
+              const gy1 = Math.min(height - 1, py + 2);
+              for (let gy = gy0; gy <= gy1; gy++) {
+                for (let gx = Math.max(0, px - guardDistMax); gx <= Math.max(0, px - guardDistMin); gx++) {
+                  if (lumFull[gy * width + gx] < plum - 15) leftNeighbors++;
+                }
+                for (let gx = Math.min(width - 1, px + guardDistMin); gx <= Math.min(width - 1, px + guardDistMax); gx++) {
+                  if (lumFull[gy * width + gx] < plum - 15) rightNeighbors++;
+                }
+              }
+              if (leftNeighbors <= 1 && rightNeighbors <= 1) {
+                writePaperPixel(px, py, pr, pg, pb);
+                boxModified++;
+              }
+            }
           }
         }
       }
