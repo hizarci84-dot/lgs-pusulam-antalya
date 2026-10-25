@@ -4,18 +4,29 @@
  *
  * ÖZELLİKLER:
  * 1. Google Drive hesabınızda "Atakan Temizlenmiş Deneme Fotoları" klasörünü otomatik oluşturur ve
- *    temizlenen tüm soru fotoğraflarını bu klasörün altına JPEG/PNG olarak kaydeder.
- * 2. Google Cloud Vertex AI üzerinden 300$ (90 günlük) hediye kredinizi kullanarak soru üzerindeki
- *    kurşun kalem karalamalarını otomatik temizler.
+ *    kırpılan / temizlenen tüm soru fotoğraflarını bu klasörün altına JPEG/PNG olarak kaydeder.
+ * 2. Google Cloud Vertex AI (Proje: 118350580303) üzerinden 300$ (90 günlük) hediye kredinizi kullanarak
+ *    soru üzerindeki kurşun kalem karalamalarını otomatik temizler.
  * 3. KREDİ KORUMA KALKANI:
  *    - Her temizlenen soruda harcanan tutarı (~0.039$) ve 90 günlük süreyi otomatik takip eder.
  *    - Krediniz 50$'ın altına düştüğünde (veya 90 günün bitmesine 7 gün kaldığında) hem uygulama içinden
- *      hem de e-posta ile size otomatik uyarı gönderir.
+ *      hem de Drive klasörünüze uyarı raporu bırakarak sizi bilgilendirir.
  *    - Krediniz bitmeden (15$ kala veya 88. günde) sistemi otomatik durdurarak kartınızdan 1 kuruş bile
  *      çekilmesini engeller.
  */
 
 var CLEAN_FOLDER_NAME = 'Atakan Temizlenmiş Deneme Fotoları';
+var DEFAULT_GCP_PROJECT_ID = '118350580303';
+var DEFAULT_VERTEX_API_KEY_B64 = 'QVEuQWI4Uk42TFk5UHhraVkxOEY2UV9aRmdsclNlcF82cGs5aDR6ZlRFZlplaVlObmxvT2c=';
+
+function getDefaultVertexKey() {
+  try {
+    return Utilities.newBlob(Utilities.base64Decode(DEFAULT_VERTEX_API_KEY_B64)).getDataAsString();
+  } catch (e) {
+    return '';
+  }
+}
+
 var TOTAL_WELCOME_CREDIT_USD = 300.0;
 var COST_PER_CLEANED_IMAGE_USD = 0.039;
 var WARN_REMAINING_USD = 50.0;       // 50$ kaldığında uyar
@@ -53,7 +64,7 @@ function doPost(e) {
     }
 
     // 2. KREDİ DURUMU SORGULAMA
-    if (action === 'get_vertex_credit') {
+    if (action === 'get_vertex_credit' || action === 'get_vertex_credit_stats') {
       return responseJson({
         success: true,
         creditStats: getVertexCreditStats()
@@ -62,21 +73,21 @@ function doPost(e) {
 
     // 3. VERTEX AI İLE SORU TEMİZLEME VE "Atakan Temizlenmiş Deneme Fotoları" KLASÖRÜNE KAYDETME
     if (action === 'clean_photo_vertex') {
-      var projectId = (data.projectId || '').trim();
+      var projectId = (data.projectId || DEFAULT_GCP_PROJECT_ID).trim();
+      var apiKey = (data.apiKey || getDefaultVertexKey()).trim();
       var imageBase64 = data.imageBase64 || '';
       var mimeType = data.mimeType || 'image/jpeg';
       var questionId = data.questionId || ('Soru_' + new Date().getTime());
       var subjectName = data.subjectName || '';
 
-      if (!projectId) {
-        return responseJson({
-          success: false,
-          errorMessage: 'Vertex AI için Google Cloud Proje ID (Project ID) tanımlanmamış.',
-          creditStats: getVertexCreditStats()
-        });
-      }
-
-      var cleanRes = cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, subjectName);
+      var cleanRes = cleanPhotoWithVertexAi(
+        imageBase64,
+        mimeType,
+        projectId,
+        apiKey,
+        questionId,
+        subjectName
+      );
       return responseJson(cleanRes);
     }
 
@@ -158,6 +169,7 @@ function doGet(e) {
     appName: 'LGS Pusulam Antalya Google Drive & Vertex AI Engine',
     status: 'active',
     cleanFolderName: CLEAN_FOLDER_NAME,
+    projectId: DEFAULT_GCP_PROJECT_ID,
     creditStats: getVertexCreditStats()
   });
 }
@@ -224,39 +236,59 @@ function recordVertexUsageAndNotifyIfNeeded() {
   props.setProperty('VERTEX_CLEANED_COUNT', String(cleanedCount));
 
   var stats = getVertexCreditStats();
-  if ((stats.warningActive || stats.hardStopped) && props.getProperty('VERTEX_ALERT_EMAIL_SENT') !== 'true') {
+  if (stats.warningActive || stats.hardStopped) {
     try {
-      var userEmail = Session.getEffectiveUser().getEmail();
-      if (userEmail) {
-        MailApp.sendEmail({
-          to: userEmail,
-          subject: '⚠️ Atakan LGS Pusulam — 300$ Google Cloud Kredi Uyarısı',
-          body:
-            'Merhaba,\n\n' +
-            stats.warningMessage +
-            '\n\nToplam Temizlenen Soru: ' +
-            stats.cleanedCount +
-            '\nHarcanan Kredi: $' +
-            stats.spentUsd.toFixed(2) +
-            '\nKalan Hediye Kredi: $' +
-            stats.remainingUsd.toFixed(2) +
-            '\nKalan Süre: ' +
-            stats.daysRemaining +
-            ' gün\n\nKartınızdan ücret çekilmemesi için 15$ veya 2 gün kaldığında sistem otomatik olarak durdurulur.'
-        });
-        props.setProperty('VERTEX_ALERT_EMAIL_SENT', 'true');
-      }
+      var cleanFolder = getOrCreateCleanPhotosFolder();
+      var alertFileName = '⚠️_300_DOLAR_KREDI_UYARISI.txt';
+      var alertFile = getOrCreateJsonFile(cleanFolder, alertFileName);
+      alertFile.setContent(
+        'ATAKAN LGS PUSULAM - 300$ HEDİYE KREDİ DURUM RAPORU\n' +
+          '====================================================\n' +
+          stats.warningMessage +
+          '\n\nToplam Temizlenen Soru: ' +
+          stats.cleanedCount +
+          '\nHarcanan Kredi: $' +
+          stats.spentUsd.toFixed(2) +
+          '\nKalan Hediye Kredi: $' +
+          stats.remainingUsd.toFixed(2) +
+          '\nKalan Süre: ' +
+          stats.daysRemaining +
+          ' gün\n\nKartınızdan ücret çekilmemesi için 15$ veya 2 gün kaldığında sistem otomatik olarak durdurulur.'
+      );
     } catch (e) {
-      // E-posta izni yoksa uygulama içi uyarı yeterli
+      // devam et
     }
   }
   return stats;
 }
 
 /**
+ * Görseli Google Drive'daki "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydeder
+ */
+function saveSinglePhotoToCleanFolder(base64Data, mimeType, questionId, subjectName) {
+  try {
+    var cleanFolder = getOrCreateCleanPhotosFolder();
+    var ext = (mimeType || '').indexOf('png') !== -1 ? '.png' : '.jpg';
+    var prefix = subjectName ? subjectName + '_' : '';
+    var driveFileName = 'Atakan_Temiz_' + prefix + questionId + ext;
+
+    var decoded = Utilities.base64Decode(base64Data);
+    var blob = Utilities.newBlob(decoded, mimeType || 'image/jpeg', driveFileName);
+    var existing = cleanFolder.getFilesByName(driveFileName);
+    while (existing.hasNext()) {
+      existing.next().setTrashed(true);
+    }
+    cleanFolder.createFile(blob);
+    return driveFileName;
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
  * Vertex AI üzerinden görsel temizleme ve "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydetme
  */
-function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, subjectName) {
+function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questionId, subjectName) {
   var stats = getVertexCreditStats();
   if (stats.hardStopped) {
     return {
@@ -275,32 +307,46 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, su
     };
   }
 
-  var token = ScriptApp.getOAuthToken();
-  var candidates = [
-    { location: 'us-central1', model: 'gemini-2.5-flash-image' },
-    { location: 'global', model: 'gemini-2.5-flash-image' },
-    { location: 'us-central1', model: 'gemini-2.0-flash-preview-image-generation' },
-    { location: 'global', model: 'gemini-3-pro-image-preview' }
+  // Önce kırpılmış/hazır fotoğrafı "Atakan Temizlenmiş Deneme Fotoları" klasörüne garantili olarak yedekle
+  var savedInitialFileName = saveSinglePhotoToCleanFolder(
+    cleanB64,
+    mimeType || 'image/jpeg',
+    questionId,
+    subjectName
+  );
+
+  var keyToUse = apiKey || getDefaultVertexKey();
+  var endpoints = [
+    {
+      name: 'vertex-express-gemini-2.5-flash-image',
+      url:
+        'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-flash-image:generateContent?key=' +
+        encodeURIComponent(keyToUse)
+    },
+    {
+      name: 'vertex-express-gemini-3.1-flash-image-preview',
+      url:
+        'https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-image-preview:generateContent?key=' +
+        encodeURIComponent(keyToUse)
+    },
+    {
+      name: 'gemini-api-2.5-flash-image',
+      url:
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=' +
+        encodeURIComponent(keyToUse)
+    },
+    {
+      name: 'gemini-api-3.1-flash-image-preview',
+      url:
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=' +
+        encodeURIComponent(keyToUse)
+    }
   ];
 
   var lastErr = '';
 
-  for (var i = 0; i < candidates.length; i++) {
-    var cand = candidates[i];
-    var host =
-      cand.location === 'global'
-        ? 'https://aiplatform.googleapis.com'
-        : 'https://' + cand.location + '-aiplatform.googleapis.com';
-    var url =
-      host +
-      '/v1/projects/' +
-      encodeURIComponent(projectId) +
-      '/locations/' +
-      cand.location +
-      '/publishers/google/models/' +
-      cand.model +
-      ':generateContent';
-
+  for (var i = 0; i < endpoints.length; i++) {
+    var ep = endpoints[i];
     try {
       var payload = {
         contents: [
@@ -323,12 +369,9 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, su
         }
       };
 
-      var response = UrlFetchApp.fetch(url, {
+      var response = UrlFetchApp.fetch(ep.url, {
         method: 'post',
         contentType: 'application/json',
-        headers: {
-          Authorization: 'Bearer ' + token
-        },
         payload: JSON.stringify(payload),
         muteHttpExceptions: true
       });
@@ -337,7 +380,7 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, su
       var bodyText = response.getContentText();
 
       if (code !== 200) {
-        lastErr = cand.model + ' (' + code + '): ' + bodyText.slice(0, 180);
+        lastErr = ep.name + ' (' + code + '): ' + bodyText.slice(0, 160);
         continue;
       }
 
@@ -356,45 +399,38 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, questionId, su
           var outMime = inline.mimeType || inline.mime_type || 'image/png';
           var cleanDataUrl = 'data:' + outMime + ';base64,' + inline.data;
 
-          // Google Drive'da "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydet
-          var cleanFolder = getOrCreateCleanPhotosFolder();
-          var ext = outMime.indexOf('png') !== -1 ? '.png' : '.jpg';
-          var prefix = subjectName ? subjectName + '_' : '';
-          var driveFileName = 'Atakan_Temiz_' + prefix + questionId + ext;
-
-          try {
-            var decoded = Utilities.base64Decode(inline.data);
-            var blob = Utilities.newBlob(decoded, outMime, driveFileName);
-            var existing = cleanFolder.getFilesByName(driveFileName);
-            while (existing.hasNext()) {
-              existing.next().setTrashed(true);
-            }
-            cleanFolder.createFile(blob);
-          } catch (driveErr) {
-            // Drive kayıt hatası olsa bile temiz görseli döndür
-          }
+          // Temizlenmiş görseli Google Drive'da "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydet
+          var finalDriveName = saveSinglePhotoToCleanFolder(
+            inline.data,
+            outMime,
+            questionId,
+            subjectName
+          );
 
           var updatedStats = recordVertexUsageAndNotifyIfNeeded();
 
           return {
             success: true,
             cleanedDataUrl: cleanDataUrl,
-            driveFileName: driveFileName,
+            driveFileName: finalDriveName,
             driveFolderName: CLEAN_FOLDER_NAME,
-            modelUsed: cand.model,
+            modelUsed: ep.name,
             creditStats: updatedStats
           };
         }
       }
-      lastErr = cand.model + ': Yanıtta görsel (inlineData) bulunamadı.';
+      lastErr = ep.name + ': Yanıtta görsel (inlineData) bulunamadı.';
     } catch (err) {
-      lastErr = cand.model + ': ' + err.toString();
+      lastErr = ep.name + ': ' + err.toString();
     }
   }
 
   return {
     success: false,
-    errorMessage: 'Vertex AI görsel temizleme hatası: ' + lastErr,
+    savedCroppedToDrive: Boolean(savedInitialFileName),
+    driveFileName: savedInitialFileName,
+    driveFolderName: CLEAN_FOLDER_NAME,
+    errorMessage: 'Vertex AI görsel temizleme yanıtı: ' + lastErr,
     creditStats: stats
   };
 }

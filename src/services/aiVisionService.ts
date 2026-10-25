@@ -25,11 +25,16 @@ export interface VertexCreditStats {
   warningMessage: string;
 }
 
+export const DEFAULT_VERTEX_PROJECT_ID = '118350580303';
+export const DEFAULT_GOOGLE_SCRIPT_WEBAPP_URL =
+  'https://script.google.com/macros/s/AKfycbzF7Fon8QOOEaodXypOF1hnKMxbp2NhC4S-p5Lw7At83E8JAIK-1tsMqVOF0WsPIDHq/exec';
+
 export function getStoredVertexProjectId(): string {
   try {
-    return (localStorage.getItem(STORAGE_KEY_VERTEX_PROJECT_ID) || '').trim();
+    const saved = (localStorage.getItem(STORAGE_KEY_VERTEX_PROJECT_ID) || '').trim();
+    return saved || DEFAULT_VERTEX_PROJECT_ID;
   } catch {
-    return '';
+    return DEFAULT_VERTEX_PROJECT_ID;
   }
 }
 
@@ -714,12 +719,13 @@ export async function generateCleanImageWithGemini(
 
     // 2. Priority 1: Google Cloud Vertex AI ($300 Credit) + Google Drive "Atakan Temizlenmiş Deneme Fotoları" Folder
     const vertexProjectId = getStoredVertexProjectId();
-    let googleScriptUrl = '';
+    const geminiKey = getStoredGeminiApiKey();
+    let googleScriptUrl = DEFAULT_GOOGLE_SCRIPT_WEBAPP_URL;
     try {
       const rawSync = localStorage.getItem('lgs_pusulam_cloud_sync_v1');
       if (rawSync) {
         const parsedSync = JSON.parse(rawSync);
-        if (parsedSync?.googleScriptUrl) {
+        if (parsedSync?.googleScriptUrl && parsedSync.googleScriptUrl.trim().startsWith('https://script.google.com')) {
           googleScriptUrl = parsedSync.googleScriptUrl.trim();
         }
       }
@@ -736,6 +742,7 @@ export async function generateCleanImageWithGemini(
           body: JSON.stringify({
             action: 'clean_photo_vertex',
             projectId: vertexProjectId,
+            apiKey: geminiKey,
             imageBase64: cleanBase64,
             mimeType,
             questionId: options?.questionId || `Soru_${Date.now()}`,
@@ -762,7 +769,6 @@ export async function generateCleanImageWithGemini(
     }
 
     // 3. Priority 2: Direct Gemini / Vertex API Key Image Generation + Credit Counter
-    const geminiKey = getStoredGeminiApiKey();
     if (!geminiKey || !geminiKey.trim()) {
       lastImageGenerationError =
         lastImageGenerationError || 'Google Gemini API anahtarı veya Vertex AI Proje ID bulunamadı.';
