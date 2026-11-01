@@ -189,7 +189,50 @@ async function fetchGeminiOrVertexGenerateContent(
   const vertexUrl = `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
   const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(cleanKey)}`;
 
-  // 1. Try Vertex AI (Agent Platform API - uses $300 Welcome Credit)
+  // 1. Try Google Apps Script Vertex AI OAuth Bridge first ($300 Welcome Credit on gemini-3.8-flash)
+  try {
+    let googleScriptUrl = DEFAULT_GOOGLE_SCRIPT_WEBAPP_URL;
+    try {
+      const rawSync = localStorage.getItem('lgs_pusulam_cloud_sync_v1');
+      if (rawSync) {
+        const parsedSync = JSON.parse(rawSync);
+        if (
+          parsedSync?.googleScriptUrl &&
+          parsedSync.googleScriptUrl.trim().startsWith('https://script.google.com')
+        ) {
+          googleScriptUrl = parsedSync.googleScriptUrl.trim();
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (googleScriptUrl && googleScriptUrl.startsWith('https://script.google.com')) {
+      const bridgeRes = await fetch(googleScriptUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        signal: AbortSignal.timeout(60000),
+        body: JSON.stringify({
+          action: 'vertex_generate_content',
+          model,
+          payload: vertexPayload,
+        }),
+      });
+      if (bridgeRes.ok) {
+        const bridgeJson = await bridgeRes.json();
+        if (bridgeJson?.candidates && bridgeJson.candidates.length > 0) {
+          return new Response(JSON.stringify(bridgeJson), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+      }
+    }
+  } catch {
+    // Fall through to direct endpoints
+  }
+
+  // 2. Try Vertex AI Express (Agent Platform API)
   try {
     const vRes = await fetch(vertexUrl, {
       method: 'POST',
@@ -200,7 +243,6 @@ async function fetchGeminiOrVertexGenerateContent(
     if (vRes.ok) {
       return vRes;
     }
-    // If key is restricted to Gemini API (403 API_KEY_SERVICE_BLOCKED) or model is Gemini-API-only (404), fall through to Gemini API
     if (vRes.status !== 403 && vRes.status !== 404 && vRes.status !== 400) {
       return vRes;
     }
@@ -208,7 +250,7 @@ async function fetchGeminiOrVertexGenerateContent(
     // Fall through to Gemini API
   }
 
-  // 2. Fallback to Gemini API (generativelanguage.googleapis.com)
+  // 3. Fallback to Gemini API (generativelanguage.googleapis.com)
   return fetch(geminiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1056,7 +1098,16 @@ export async function cleanCroppedQuestionImage(
   }
 
   try {
-    const geminiCleanDataUrl = await generateCleanImageWithGemini(croppedDataUrl);
+    const targetSubject: SubjectId = subjectHint || 'matematik';
+    const [geminiCleanDataUrl, topicRes] = await Promise.all([
+      generateCleanImageWithGemini(croppedDataUrl, {
+        subjectName: SUBJECT_MAP[targetSubject]?.name || targetSubject,
+      }),
+      detectQuestionTopicWithAi({
+        dataUrl: croppedDataUrl,
+        subjectId: targetSubject,
+      }).catch(() => null),
+    ]);
     const lastError = lastImageGenerationError || 'Görsel temizleme modeli (inlineData) yanıt döndürmedi.';
 
     if (geminiCleanDataUrl) {
@@ -1065,12 +1116,18 @@ export async function cleanCroppedQuestionImage(
         cleanDataUrl: geminiCleanDataUrl,
         rawOriginalDataUrl: croppedDataUrl,
         cleanupStatus: 'success',
-        statusMessage: '✨ Temizleme Başarılı: Yapay zekâ ile tüm kurşun kalem karalamaları temizlendi.',
+        statusMessage: '✨ Temizleme Başarılı: Yapay zekâ ile tüm kurşun kalem karalamaları temizlendi ve konu belirlendi.',
         cleanedMarkCount: 1,
         preservedRiskMarkCount: 0,
         overlapWarning: false,
         overlapMessage: '',
-        detectedSubject: subjectHint || 'matematik',
+        detectedSubject: targetSubject,
+        topicId: topicRes?.topicId,
+        topicName: topicRes?.topicName,
+        subtopicName: topicRes?.subtopicName,
+        detectedTopicName: topicRes?.topicName,
+        detectedSubtopicName: topicRes?.subtopicName,
+        confidence: topicRes?.confidence,
       };
     }
 
@@ -1084,6 +1141,13 @@ export async function cleanCroppedQuestionImage(
       preservedRiskMarkCount: 0,
       overlapWarning: false,
       overlapMessage: '',
+      detectedSubject: targetSubject,
+      topicId: topicRes?.topicId,
+      topicName: topicRes?.topicName,
+      subtopicName: topicRes?.subtopicName,
+      detectedTopicName: topicRes?.topicName,
+      detectedSubtopicName: topicRes?.subtopicName,
+      confidence: topicRes?.confidence,
       errorMessage: lastError,
     };
   } catch (err: any) {

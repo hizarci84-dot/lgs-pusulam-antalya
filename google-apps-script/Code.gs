@@ -104,6 +104,14 @@ function doPost(e) {
       return responseJson(cleanRes);
     }
 
+    // 3.5 VERTEX AI İLE KONU TESPİTİ, SORU ÇÖZÜMÜ VE METİN/GÖRSEL ANALİZİ (gemini-3.8-flash)
+    if (action === 'vertex_generate_content') {
+      var modelName = (data.model || 'gemini-3.8-flash').trim();
+      var payloadBody = data.payload || {};
+      var genRes = generateContentWithVertexAi(modelName, payloadBody);
+      return responseJson(genRes);
+    }
+
     // 4. VERİ SENKRONİZASYONU (SYNC)
     if (action === 'sync') {
       var rootFolder = getOrCreateLgsFolder();
@@ -340,6 +348,73 @@ function getVertexOAuthAccessToken() {
     // ignore
   }
   return '';
+}
+
+/**
+ * Vertex AI (OAuth) üzerinden metin / konu tespiti / soru çözümü (gemini-3.8-flash)
+ */
+function generateContentWithVertexAi(modelName, payloadBody) {
+  var props = PropertiesService.getScriptProperties();
+  var gcpProject = props.getProperty('VERTEX_GCP_PROJECT_ID') || 'gen-lang-client-0553886215';
+  var oauthToken = getVertexOAuthAccessToken();
+  if (!oauthToken) {
+    return {
+      error: {
+        code: 401,
+        message: 'Vertex AI OAuth token bulunamadı.'
+      }
+    };
+  }
+
+  var candidates = [
+    { location: 'global', model: 'gemini-3.8-flash' },
+    { location: 'global', model: modelName || 'gemini-3.8-flash' },
+    { location: 'us-central1', model: 'gemini-2.5-flash-image' }
+  ];
+
+  var lastBody = '';
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    var host =
+      c.location === 'global'
+        ? 'https://aiplatform.googleapis.com'
+        : 'https://' + c.location + '-aiplatform.googleapis.com';
+    var url =
+      host +
+      '/v1/projects/' +
+      encodeURIComponent(gcpProject) +
+      '/locations/' +
+      c.location +
+      '/publishers/google/models/' +
+      encodeURIComponent(c.model) +
+      ':generateContent';
+
+    try {
+      var res = UrlFetchApp.fetch(url, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: {
+          Authorization: 'Bearer ' + oauthToken
+        },
+        payload: JSON.stringify(payloadBody),
+        muteHttpExceptions: true
+      });
+      var code = res.getResponseCode();
+      var txt = res.getContentText();
+      if (code === 200) {
+        return JSON.parse(txt);
+      }
+      lastBody = txt;
+    } catch (e) {
+      lastBody = JSON.stringify({ error: { message: e.toString() } });
+    }
+  }
+
+  try {
+    return JSON.parse(lastBody);
+  } catch (e) {
+    return { error: { message: lastBody || 'Vertex AI yanıt döndüremedi.' } };
+  }
 }
 
 /**

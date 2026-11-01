@@ -616,6 +616,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           preservedRiskMarkCount: 0,
           overlapWarning: false,
           overlapMessage: '',
+          topicId: cleanRes.topicId || capturedPreview.topicId,
           topicName: cleanRes.detectedTopicName || capturedPreview.topicName,
           subtopicName: cleanRes.detectedSubtopicName || capturedPreview.subtopicName,
         });
@@ -627,6 +628,9 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           isCleaned: false,
           cleanupStatus: 'manual_needed',
           statusMessage: cleanRes.statusMessage,
+          topicId: cleanRes.topicId || capturedPreview.topicId,
+          topicName: cleanRes.detectedTopicName || capturedPreview.topicName,
+          subtopicName: cleanRes.detectedSubtopicName || capturedPreview.subtopicName,
         });
         setErrorMsg(
           cleanRes.errorMessage ||
