@@ -29,6 +29,7 @@ function getDefaultVertexKey() {
 
 var TOTAL_WELCOME_CREDIT_USD = 300.0;
 var COST_PER_CLEANED_IMAGE_USD = 0.039;
+var COST_PER_ANALYSIS_USD = 0.001;
 var WARN_REMAINING_USD = 50.0;       // 50$ kaldığında uyar
 var HARD_STOP_REMAINING_USD = 15.0;  // 15$ kaldığında otomatik durdur (karttan çekim olmasın)
 var TRIAL_TOTAL_DAYS = 90;
@@ -201,6 +202,7 @@ function doGet(e) {
 function getVertexCreditStats() {
   var props = PropertiesService.getScriptProperties();
   var cleanedCount = parseInt(props.getProperty('VERTEX_CLEANED_COUNT') || '0', 10);
+  var analysisCount = parseInt(props.getProperty('VERTEX_ANALYSIS_COUNT') || '0', 10);
   var trialStartIso = props.getProperty('VERTEX_TRIAL_START_DATE');
   if (!trialStartIso) {
     trialStartIso = new Date().toISOString();
@@ -212,8 +214,10 @@ function getVertexCreditStats() {
   var elapsedDays = Math.max(0, Math.floor((nowMs - startMs) / (1000 * 60 * 60 * 24)));
   var daysRemaining = Math.max(0, TRIAL_TOTAL_DAYS - elapsedDays);
 
-  var spentUsd = Math.round(cleanedCount * COST_PER_CLEANED_IMAGE_USD * 100) / 100;
-  var remainingUsd = Math.max(0, Math.round((TOTAL_WELCOME_CREDIT_USD - spentUsd) * 100) / 100);
+  var spentUsd =
+    Math.round((cleanedCount * COST_PER_CLEANED_IMAGE_USD + analysisCount * COST_PER_ANALYSIS_USD) * 1000) /
+    1000;
+  var remainingUsd = Math.max(0, Math.round((TOTAL_WELCOME_CREDIT_USD - spentUsd) * 1000) / 1000);
 
   var hardStopped =
     remainingUsd <= HARD_STOP_REMAINING_USD || daysRemaining <= HARD_STOP_REMAINING_DAYS;
@@ -240,6 +244,7 @@ function getVertexCreditStats() {
 
   return {
     cleanedCount: cleanedCount,
+    analysisCount: analysisCount,
     spentUsd: spentUsd,
     remainingUsd: remainingUsd,
     totalCreditUsd: TOTAL_WELCOME_CREDIT_USD,
@@ -411,7 +416,11 @@ function generateContentWithVertexAi(modelName, payloadBody) {
       var code = res.getResponseCode();
       var txt = res.getContentText();
       if (code === 200) {
-        return JSON.parse(txt);
+        var curAnalysis = parseInt(props.getProperty('VERTEX_ANALYSIS_COUNT') || '0', 10) + 1;
+        props.setProperty('VERTEX_ANALYSIS_COUNT', String(curAnalysis));
+        var parsedOut = JSON.parse(txt);
+        parsedOut.creditStats = getVertexCreditStats();
+        return parsedOut;
       }
       lastBody = txt;
     } catch (e) {

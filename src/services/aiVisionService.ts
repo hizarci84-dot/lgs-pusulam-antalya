@@ -220,6 +220,9 @@ async function fetchGeminiOrVertexGenerateContent(
       });
       if (bridgeRes.ok) {
         const bridgeJson = await bridgeRes.json();
+        if (bridgeJson?.creditStats) {
+          saveStoredVertexCreditStats(bridgeJson.creditStats);
+        }
         if (bridgeJson?.candidates && bridgeJson.candidates.length > 0) {
           return new Response(JSON.stringify(bridgeJson), {
             status: 200,
