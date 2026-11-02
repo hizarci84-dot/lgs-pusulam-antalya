@@ -30,7 +30,7 @@ function getDefaultVertexKey() {
 var TOTAL_WELCOME_CREDIT_USD = 300.0;
 var COST_PER_CLEANED_IMAGE_USD = 0.039;
 var WARN_REMAINING_USD = 50.0;       // 50$ kaldığında uyar
-var HARD_STOP_REMAINING_USD = 15.0;  // 15$ kaldığında otomatik durdur (karttan çekim olmasın)
+var HARD_STOP_REMAINING_USD = 300.0; // Karttan çekim yapıldığı tespit edildiği için ücretli Vertex AI çağrıları otomatik durduruldu
 var TRIAL_TOTAL_DAYS = 90;
 var WARN_REMAINING_DAYS = 7;         // 7 gün kaldığında uyar
 var HARD_STOP_REMAINING_DAYS = 2;    // 2 gün kaldığında otomatik durdur
@@ -354,6 +354,15 @@ function getVertexOAuthAccessToken() {
  * Vertex AI (OAuth) üzerinden metin / konu tespiti / soru çözümü (gemini-3.8-flash)
  */
 function generateContentWithVertexAi(modelName, payloadBody) {
+  var stats = getVertexCreditStats();
+  if (stats.hardStopped) {
+    return {
+      error: {
+        code: 403,
+        message: 'Kartınızdan ücret çekilmemesi için ücretli Vertex AI bağlantısı durduruldu.'
+      }
+    };
+  }
   var props = PropertiesService.getScriptProperties();
   var gcpProject = props.getProperty('VERTEX_GCP_PROJECT_ID') || 'gen-lang-client-0553886215';
   var oauthToken = getVertexOAuthAccessToken();
