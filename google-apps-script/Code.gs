@@ -30,7 +30,7 @@ function getDefaultVertexKey() {
 var TOTAL_WELCOME_CREDIT_USD = 300.0;
 var COST_PER_CLEANED_IMAGE_USD = 0.039;
 var WARN_REMAINING_USD = 50.0;       // 50$ kaldığında uyar
-var HARD_STOP_REMAINING_USD = 300.0; // Karttan çekim yapıldığı tespit edildiği için ücretli Vertex AI çağrıları otomatik durduruldu
+var HARD_STOP_REMAINING_USD = 15.0;  // 15$ kaldığında otomatik durdur (karttan çekim olmasın)
 var TRIAL_TOTAL_DAYS = 90;
 var WARN_REMAINING_DAYS = 7;         // 7 gün kaldığında uyar
 var HARD_STOP_REMAINING_DAYS = 2;    // 2 gün kaldığında otomatik durdur
@@ -480,13 +480,8 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questi
       bearer: oauthToken
     });
   }
-  endpoints.push({
-    name: 'gemini-api-2.5-flash-image',
-    url:
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=' +
-      encodeURIComponent(keyToUse),
-    bearer: ''
-  });
+  // DİKKAT: generativelanguage.googleapis.com (Gemini API) 300$ hediye krediden hariç tutulduğu için
+  // karttan ücret çekilmemesi adına tamamen kaldırıldı. Yalnızca Vertex AI (aiplatform.googleapis.com) kullanılır.
 
   var lastErr = '';
 

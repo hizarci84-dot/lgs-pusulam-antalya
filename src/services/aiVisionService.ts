@@ -250,7 +250,20 @@ async function fetchGeminiOrVertexGenerateContent(
     // Fall through to Gemini API
   }
 
-  // 3. Fallback to Gemini API (generativelanguage.googleapis.com)
+  // 2. Fallback to Gemini API ONLY if user provided a custom AIza... key (NEVER call generativelanguage.googleapis.com with the AQ.Ab8 service account key because Google excludes Gemini API from the $300 Welcome Credit!)
+  if (cleanKey.startsWith('AQ.')) {
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 403,
+          message:
+            'Kartınızdan ücret çekilmemesi için Gemini API (generativelanguage.googleapis.com) devre dışı bırakıldı; yalnızca Vertex AI (300$ Hediye Kredi) kullanılır.',
+        },
+      }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+
   return fetch(geminiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -856,10 +869,10 @@ export async function generateCleanImageWithGemini(
       }
     }
 
-    // 3. Priority 2: Direct Gemini / Vertex API Key Image Generation + Credit Counter
-    if (!geminiKey || !geminiKey.trim()) {
+    // 3. Priority 2: Direct Gemini API Key Image Generation ONLY if user provided a custom AIza... key (NEVER call generativelanguage.googleapis.com with AQ.Ab8 key so $300 Vertex AI credit is exclusively used)
+    if (!geminiKey || !geminiKey.trim() || geminiKey.trim().startsWith('AQ.')) {
       lastImageGenerationError =
-        lastImageGenerationError || 'Google Gemini API anahtarı veya Vertex AI Proje ID bulunamadı.';
+        lastImageGenerationError || 'Vertex AI (300$ Kredi) görsel temizleme köprüsünden yanıt alınamadı.';
       return null;
     }
 
