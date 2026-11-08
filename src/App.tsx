@@ -25,7 +25,7 @@ import { QuestionDetailModal } from './components/QuestionDetailModal';
 import { QuickPhotoUploadModal } from './components/QuickPhotoUploadModal';
 import { SchoolsView } from './components/SchoolsView';
 import { computePercentileAndScoreEstimate } from './services/calculationEngine';
-import { syncWithCloud } from './services/cloudSync';
+import { scheduleBackgroundSync, syncWithCloud } from './services/cloudSync';
 import {
   clearAllExamsAndQuestions,
   clearAllUserData,
@@ -277,7 +277,7 @@ export const App: React.FC = () => {
   const triggerBackgroundSync = useCallback(() => {
     getCloudSyncSettings().then((cs) => {
       if (cs.enabled && cs.autoSync && navigator.onLine) {
-        syncWithCloud().catch(() => {});
+        scheduleBackgroundSync(400);
       }
     });
   }, []);

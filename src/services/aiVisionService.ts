@@ -346,11 +346,13 @@ export function downscaleDataUrlForAi(dataUrl: string, maxDim = 1024): Promise<s
       try {
         const w = img.naturalWidth || img.width;
         const h = img.naturalHeight || img.height;
-        if (w <= maxDim && h <= maxDim) {
+        const isLargeOrPng =
+          dataUrl.startsWith('data:image/png') || dataUrl.length > 350000;
+        if (w <= maxDim && h <= maxDim && !isLargeOrPng) {
           resolve(dataUrl);
           return;
         }
-        const scale = maxDim / Math.max(w, h);
+        const scale = w > maxDim || h > maxDim ? maxDim / Math.max(w, h) : 1;
         const targetW = Math.max(10, Math.round(w * scale));
         const targetH = Math.max(10, Math.round(h * scale));
         const canvas = document.createElement('canvas');
@@ -364,7 +366,7 @@ export function downscaleDataUrlForAi(dataUrl: string, maxDim = 1024): Promise<s
         ctx.fillStyle = '#ffffff';
         ctx.fillRect(0, 0, targetW, targetH);
         ctx.drawImage(img, 0, 0, targetW, targetH);
-        resolve(canvas.toDataURL('image/jpeg', 0.84));
+        resolve(canvas.toDataURL('image/jpeg', 0.86));
       } catch {
         resolve(dataUrl);
       }
@@ -861,7 +863,7 @@ export async function generateCleanImageWithGemini(
           }
           if (vData?.success && vData?.cleanedDataUrl) {
             lastImageGenerationError = '';
-            return vData.cleanedDataUrl;
+            return await downscaleDataUrlForAi(vData.cleanedDataUrl, 1280);
           }
           if (vData?.errorMessage) {
             lastImageGenerationError = vData.errorMessage;

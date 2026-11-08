@@ -113,68 +113,187 @@ function doPost(e) {
       return responseJson(genRes);
     }
 
-    // 4. VERİ SENKRONİZASYONU (SYNC)
+    // 4. VERİ SENKRONİZASYONU (HIZLI DELTA SYNC - META & FOTOĞRAF AYRIŞTIRILMASI)
     if (action === 'sync') {
-      var rootFolder = getOrCreateLgsFolder();
-      var photoFolder = getOrCreateSubFolder(rootFolder, 'Soru Fotoğrafları');
-      var cleanPhotosFolder = getOrCreateCleanPhotosFolder();
-      var fileName = 'lgs_data_' + familySyncId + '.json';
-      var file = getOrCreateJsonFile(rootFolder, fileName);
+      var metaFileName = 'lgs_meta_' + familySyncId + '.json';
+      var photosFileName = 'lgs_photos_' + familySyncId + '.json';
+      var legacyFileName = 'lgs_data_' + familySyncId + '.json';
 
-      var cloudData = {};
-      var fileContent = file.getBlob().getDataAsString();
-      if (fileContent && fileContent.trim().length > 0) {
-        try {
-          cloudData = JSON.parse(fileContent);
-        } catch (err) {
-          cloudData = {};
+      var metaData = loadOrMigrateMetaAndPhotos(
+        metaFileName,
+        photosFileName,
+        legacyFileName
+      );
+
+      var local = data.localChanges || {};
+      var localDeletions = local.deletions || [];
+      var localStudents = local.students || [];
+      var localExams = local.exams || [];
+      var localQuestions = local.questions || [];
+      var localPhotos = local.photoAssets || [];
+      var localPlans = local.studyPlans || [];
+
+      var hasMetaChanges = false;
+      var hasPhotoChanges = false;
+      var newlyAddedPhotosForDrive = [];
+
+      // A) Silinen kayıtları buluttan temizle
+      for (var dIdx = 0; dIdx < localDeletions.length; dIdx++) {
+        var d = localDeletions[dIdx];
+        if (!d || !d.id) continue;
+        metaData.deletions[d.id] = d;
+        hasMetaChanges = true;
+        if (d.entityType === 'student') delete metaData.students[d.id];
+        if (d.entityType === 'exam') delete metaData.exams[d.id];
+        if (d.entityType === 'question') delete metaData.questions[d.id];
+        if (d.entityType === 'studyPlan') delete metaData.studyPlans[d.id];
+        if (d.entityType === 'photo') {
+          delete metaData.photoIndex[d.id];
+          hasPhotoChanges = true;
         }
       }
 
-      if (!cloudData.students) cloudData.students = {};
-      if (!cloudData.exams) cloudData.exams = {};
-      if (!cloudData.questions) cloudData.questions = {};
-      if (!cloudData.photoAssets) cloudData.photoAssets = {};
-      if (!cloudData.studyPlans) cloudData.studyPlans = {};
-      if (!cloudData.deletions) cloudData.deletions = {};
+      // B) Yerel meta güncellemeleri (Last-Write-Wins) buluta kaydet
+      for (var sIdx = 0; sIdx < localStudents.length; sIdx++) {
+        var s = localStudents[sIdx];
+        if (!s || !s.id) continue;
+        var exS = metaData.students[s.id];
+        if (!exS || (s.updatedAt || s.createdAt || '') >= (exS.updatedAt || exS.createdAt || '')) {
+          metaData.students[s.id] = s;
+          hasMetaChanges = true;
+        }
+      }
 
-      var local = data.localChanges || {};
+      for (var eIdx = 0; eIdx < localExams.length; eIdx++) {
+        var eItem = localExams[eIdx];
+        if (!eItem || !eItem.id) continue;
+        var exE = metaData.exams[eItem.id];
+        if (!exE || (eItem.updatedAt || eItem.createdAt || '') >= (exE.updatedAt || exE.createdAt || '')) {
+          metaData.exams[eItem.id] = eItem;
+          hasMetaChanges = true;
+        }
+      }
 
-      // A) Silinen kayıtları buluttan temizle
-      (local.deletions || []).forEach(function(d) {
-        cloudData.deletions[d.id] = d;
-        if (d.entityType === 'student') delete cloudData.students[d.id];
-        if (d.entityType === 'exam') delete cloudData.exams[d.id];
-        if (d.entityType === 'question') delete cloudData.questions[d.id];
-        if (d.entityType === 'photo') delete cloudData.photoAssets[d.id];
-        if (d.entityType === 'studyPlan') delete cloudData.studyPlans[d.id];
-      });
+      for (var qIdx = 0; qIdx < localQuestions.length; qIdx++) {
+        var q = localQuestions[qIdx];
+        if (!q || !q.id) continue;
+        var exQ = metaData.questions[q.id];
+        if (!exQ || (q.updatedAt || q.createdAt || '') >= (exQ.updatedAt || exQ.createdAt || '')) {
+          metaData.questions[q.id] = q;
+          hasMetaChanges = true;
+        }
+      }
 
-      // B) Yerel güncellemeleri buluta kaydet
-      (local.students || []).forEach(function(s) { cloudData.students[s.id] = s; });
-      (local.exams || []).forEach(function(e) { cloudData.exams[e.id] = e; });
-      (local.questions || []).forEach(function(q) { cloudData.questions[q.id] = q; });
-      (local.photoAssets || []).forEach(function(p) { cloudData.photoAssets[p.id] = p; });
-      (local.studyPlans || []).forEach(function(sp) { cloudData.studyPlans[sp.id] = sp; });
+      for (var spIdx = 0; spIdx < localPlans.length; spIdx++) {
+        var sp = localPlans[spIdx];
+        if (!sp || !sp.id) continue;
+        var exSp = metaData.studyPlans[sp.id];
+        if (!exSp || (sp.generatedAt || '') >= (exSp.generatedAt || '')) {
+          metaData.studyPlans[sp.id] = sp;
+          hasMetaChanges = true;
+        }
+      }
 
-      // C) Fotoğrafları Google Drive klasörlerine kaydet
-      savePhotosToDriveFolder(photoFolder, cleanPhotosFolder, local.photoAssets || []);
+      for (var pIdx = 0; pIdx < localPhotos.length; pIdx++) {
+        var pItem = localPhotos[pIdx];
+        if (!pItem || !pItem.id) continue;
+        if (!metaData.photoIndex[pItem.id]) {
+          newlyAddedPhotosForDrive.push(pItem);
+        }
+        metaData.photoIndex[pItem.id] = pItem.createdAt || new Date().toISOString();
+        hasMetaChanges = true;
+        hasPhotoChanges = true;
+      }
 
-      // D) Buluttaki güncel veriyi ana JSON dosyasına yaz
-      file.setContent(JSON.stringify(cloudData));
+      // C) İstemcinin hangi fotoğraflara ihtiyaç duyduğunu belirle (Delta Photo Sync)
+      var knownPhotoIds = Array.isArray(data.knownPhotoIds) ? data.knownPhotoIds : null;
+      var knownMap = {};
+      if (knownPhotoIds) {
+        for (var k = 0; k < knownPhotoIds.length; k++) {
+          knownMap[knownPhotoIds[k]] = true;
+        }
+      }
+
+      var allCloudPhotoIds = Object.keys(metaData.photoIndex || {});
+      var missingPhotoIds = [];
+      for (var mIdx = 0; mIdx < allCloudPhotoIds.length; mIdx++) {
+        var pid = allCloudPhotoIds[mIdx];
+        if (!knownMap[pid]) {
+          missingPhotoIds.push(pid);
+        }
+      }
+
+      // D) Yalnızca fotoğraf değişikliği varsa veya istemcide eksik fotoğraf varsa lgs_photos dosyasını aç
+      var remotePhotosToSend = [];
+      if (hasPhotoChanges || missingPhotoIds.length > 0) {
+        var photosFile = getFastJsonFile(photosFileName);
+        var photosMap = {};
+        var photosRaw = photosFile.getBlob().getDataAsString();
+        if (photosRaw && photosRaw.trim().length > 0) {
+          try {
+            var parsedPhotos = JSON.parse(photosRaw);
+            photosMap = parsedPhotos.photoAssets || parsedPhotos || {};
+          } catch (errP) {
+            photosMap = {};
+          }
+        }
+
+        if (hasPhotoChanges) {
+          for (var d2 = 0; d2 < localDeletions.length; d2++) {
+            var delItem = localDeletions[d2];
+            if (delItem && delItem.entityType === 'photo') {
+              delete photosMap[delItem.id];
+            }
+          }
+          for (var lp = 0; lp < localPhotos.length; lp++) {
+            var compressedPhoto = optimizePhotoAssetForCloud(localPhotos[lp]);
+            photosMap[compressedPhoto.id] = compressedPhoto;
+            knownMap[compressedPhoto.id] = true; // İstemci zaten bu fotoğrafa sahip
+          }
+          photosFile.setContent(JSON.stringify({ photoAssets: photosMap }));
+        }
+
+        // Yalnızca istemcide olmayan (eksik) fotoğrafları gönder
+        for (var mp = 0; mp < missingPhotoIds.length; mp++) {
+          var reqId = missingPhotoIds[mp];
+          if (!knownMap[reqId] && photosMap[reqId]) {
+            remotePhotosToSend.push(photosMap[reqId]);
+          }
+        }
+      }
+
+      // E) Yeni eklenen fotoğrafları Drive klasörüne kaydet (en fazla 2 adet/senkronizasyon ile hızı koru)
+      if (newlyAddedPhotosForDrive.length > 0) {
+        var rootFolderForDrive = getOrCreateLgsFolder();
+        var photoFolder = getOrCreateSubFolder(rootFolderForDrive, 'Soru Fotoğrafları');
+        var cleanPhotosFolder = getOrCreateCleanPhotosFolder();
+        savePhotosToDriveFolder(
+          photoFolder,
+          cleanPhotosFolder,
+          newlyAddedPhotosForDrive.slice(0, 2)
+        );
+      }
+
+      // F) Yalnızca meta veride değişiklik olduysa meta JSON dosyasını yaz
+      if (hasMetaChanges) {
+        var metaFile = getFastJsonFile(metaFileName);
+        metaFile.setContent(JSON.stringify(metaData));
+      }
 
       var remoteChanges = {
-        students: Object.values(cloudData.students),
-        exams: Object.values(cloudData.exams),
-        questions: Object.values(cloudData.questions),
-        photoAssets: Object.values(cloudData.photoAssets),
-        studyPlans: Object.values(cloudData.studyPlans),
-        deletions: Object.values(cloudData.deletions)
+        students: Object.values(metaData.students),
+        exams: Object.values(metaData.exams),
+        questions: Object.values(metaData.questions),
+        photoAssets: remotePhotosToSend,
+        studyPlans: Object.values(metaData.studyPlans),
+        deletions: Object.values(metaData.deletions)
       };
 
       return responseJson({
         success: true,
         remoteChanges: remoteChanges,
+        totalCloudPhotos: allCloudPhotoIds.length,
+        syncedNewPhotos: remotePhotosToSend.length,
         creditStats: getVertexCreditStats(),
         serverTime: new Date().toISOString()
       });
@@ -551,11 +670,25 @@ function cleanPhotoWithVertexAi(imageBase64, mimeType, projectId, apiKey, questi
         var inline = part.inlineData || part.inline_data;
         if (inline && inline.data && inline.data.length > 100) {
           var outMime = inline.mimeType || inline.mime_type || 'image/png';
-          var cleanDataUrl = 'data:' + outMime + ';base64,' + inline.data;
+          var outBase64 = inline.data;
+
+          // Vertex AI PNG döndürdüğünde (~1.3MB), hız için otomatik olarak JPEG'e (~95KB) dönüştür
+          if (outMime.indexOf('png') !== -1) {
+            try {
+              var pngBytes = Utilities.base64Decode(outBase64);
+              var jpgBlob = Utilities.newBlob(pngBytes, 'image/png', 'clean.png').getAs('image/jpeg');
+              outBase64 = Utilities.base64Encode(jpgBlob.getBytes());
+              outMime = 'image/jpeg';
+            } catch (convErr) {
+              // Dönüştürme başarısız olursa orijinal PNG korunur
+            }
+          }
+
+          var cleanDataUrl = 'data:' + outMime + ';base64,' + outBase64;
 
           // Temizlenmiş görseli Google Drive'da "Atakan Temizlenmiş Deneme Fotoları" klasörüne kaydet
           var finalDriveName = saveSinglePhotoToCleanFolder(
-            inline.data,
+            outBase64,
             outMime,
             questionId,
             subjectName
@@ -623,6 +756,185 @@ function getOrCreateJsonFile(folder, fileName) {
     return files.next();
   }
   return folder.createFile(fileName, '{}', MimeType.PLAIN_TEXT);
+}
+
+/**
+ * PNG veya büyük boyutlu Base64 DataURL görsellerini sunucu tarafında hafif JPEG'e dönüştürür
+ */
+function convertDataUrlToJpegServer(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string' || dataUrl.indexOf('base64,') === -1) {
+    return dataUrl;
+  }
+  if (dataUrl.indexOf('data:image/png') === 0 || dataUrl.length > 450000) {
+    try {
+      var parts = dataUrl.split('base64,');
+      var mime = parts[0].replace('data:', '').replace(';', '') || 'image/png';
+      var rawBytes = Utilities.base64Decode(parts[1]);
+      var jpgBlob = Utilities.newBlob(rawBytes, mime, 'temp.png').getAs('image/jpeg');
+      var jpgB64 = Utilities.base64Encode(jpgBlob.getBytes());
+      var candidate = 'data:image/jpeg;base64,' + jpgB64;
+      if (candidate.length < dataUrl.length) {
+        return candidate;
+      }
+    } catch (e) {
+      // Hata durumunda orijinali koru
+    }
+  }
+  return dataUrl;
+}
+
+/**
+ * Buluta kaydedilecek fotoğraf kaydını optimize eder (PNG -> JPEG ve çift kopya engelleme)
+ */
+function optimizePhotoAssetForCloud(p) {
+  if (!p) return p;
+  var copy = {};
+  var keys = Object.keys(p);
+  for (var i = 0; i < keys.length; i++) {
+    copy[keys[i]] = p[keys[i]];
+  }
+  if (copy.croppedDataUrl) {
+    copy.croppedDataUrl = convertDataUrlToJpegServer(copy.croppedDataUrl);
+  }
+  if (copy.originalDataUrl) {
+    copy.originalDataUrl = convertDataUrlToJpegServer(copy.originalDataUrl);
+  }
+  // Kırpılmış/temizlenmiş görsel varsa, bulut JSON boyutunu ikiye katlamamak için originalDataUrl'i kırpılmış görselle eşitle
+  if (
+    copy.croppedDataUrl &&
+    copy.originalDataUrl &&
+    copy.originalDataUrl.length > 250000
+  ) {
+    copy.originalDataUrl = copy.croppedDataUrl;
+  }
+  copy.mimeType = 'image/jpeg';
+  return copy;
+}
+
+function getFastJsonFile(fileName) {
+  var props = PropertiesService.getScriptProperties();
+  var propKey = 'FAST_FILE_ID_' + fileName;
+  var cachedId = props.getProperty(propKey);
+  if (cachedId) {
+    try {
+      return DriveApp.getFileById(cachedId);
+    } catch (e) {
+      props.deleteProperty(propKey);
+    }
+  }
+  var rootFolder = getOrCreateLgsFolder();
+  var file = getOrCreateJsonFile(rootFolder, fileName);
+  try {
+    props.setProperty(propKey, file.getId());
+  } catch (e2) {}
+  return file;
+}
+
+/**
+ * Meta veriyi (~60KB) ve fotoğraf verisini (~2MB) ayrı dosyalarda tutar.
+ * Eski tekil lgs_data_<id>.json (42MB) varsa otomatik olarak ayrıştırır ve PNG'leri JPEG'e sıkıştırır.
+ */
+function loadOrMigrateMetaAndPhotos(metaFileName, photosFileName, legacyFileName) {
+  var props = PropertiesService.getScriptProperties();
+  var metaIdKey = 'FAST_FILE_ID_' + metaFileName;
+  var cachedMetaId = props.getProperty(metaIdKey);
+  if (cachedMetaId) {
+    try {
+      var fastMetaFile = DriveApp.getFileById(cachedMetaId);
+      var fastRaw = fastMetaFile.getBlob().getDataAsString();
+      if (fastRaw && fastRaw.trim().length > 2) {
+        var fastParsed = JSON.parse(fastRaw);
+        if (!fastParsed.students) fastParsed.students = {};
+        if (!fastParsed.exams) fastParsed.exams = {};
+        if (!fastParsed.questions) fastParsed.questions = {};
+        if (!fastParsed.studyPlans) fastParsed.studyPlans = {};
+        if (!fastParsed.deletions) fastParsed.deletions = {};
+        if (!fastParsed.photoIndex) fastParsed.photoIndex = {};
+        return fastParsed;
+      }
+    } catch (fastErr) {
+      props.deleteProperty(metaIdKey);
+    }
+  }
+
+  var rootFolder = getOrCreateLgsFolder();
+  var metaFiles = rootFolder.getFilesByName(metaFileName);
+  if (metaFiles.hasNext()) {
+    var metaFile = metaFiles.next();
+    try {
+      props.setProperty(metaIdKey, metaFile.getId());
+    } catch (eId) {}
+    var rawMeta = metaFile.getBlob().getDataAsString();
+    if (rawMeta && rawMeta.trim().length > 2) {
+      try {
+        var parsedMeta = JSON.parse(rawMeta);
+        if (!parsedMeta.students) parsedMeta.students = {};
+        if (!parsedMeta.exams) parsedMeta.exams = {};
+        if (!parsedMeta.questions) parsedMeta.questions = {};
+        if (!parsedMeta.studyPlans) parsedMeta.studyPlans = {};
+        if (!parsedMeta.deletions) parsedMeta.deletions = {};
+        if (!parsedMeta.photoIndex) parsedMeta.photoIndex = {};
+        return parsedMeta;
+      } catch (e) {
+        // Bozuksa aşağıda yeniden oluştur
+      }
+    }
+  }
+
+  // Henüz lgs_meta_<id>.json yoksa, eski lgs_data_<id>.json dosyasından otomatik taşı ve sıkıştır
+  var emptyMeta = {
+    students: {},
+    exams: {},
+    questions: {},
+    studyPlans: {},
+    deletions: {},
+    photoIndex: {}
+  };
+
+  var legacyFiles = rootFolder.getFilesByName(legacyFileName);
+  if (!legacyFiles.hasNext()) {
+    var newMetaFile = getOrCreateJsonFile(rootFolder, metaFileName);
+    newMetaFile.setContent(JSON.stringify(emptyMeta));
+    return emptyMeta;
+  }
+
+  var legacyFile = legacyFiles.next();
+  var legacyRaw = legacyFile.getBlob().getDataAsString();
+  var legacyData = {};
+  if (legacyRaw && legacyRaw.trim().length > 0) {
+    try {
+      legacyData = JSON.parse(legacyRaw);
+    } catch (e) {
+      legacyData = {};
+    }
+  }
+
+  emptyMeta.students = legacyData.students || {};
+  emptyMeta.exams = legacyData.exams || {};
+  emptyMeta.questions = legacyData.questions || {};
+  emptyMeta.studyPlans = legacyData.studyPlans || {};
+  emptyMeta.deletions = legacyData.deletions || {};
+
+  var legacyPhotos = legacyData.photoAssets || {};
+  var optimizedPhotos = {};
+  var pIds = Object.keys(legacyPhotos);
+  for (var i = 0; i < pIds.length; i++) {
+    var pid = pIds[i];
+    var pObj = legacyPhotos[pid];
+    if (pObj && pObj.id) {
+      var opt = optimizePhotoAssetForCloud(pObj);
+      optimizedPhotos[pid] = opt;
+      emptyMeta.photoIndex[pid] = opt.createdAt || new Date().toISOString();
+    }
+  }
+
+  var photosFile = getOrCreateJsonFile(rootFolder, photosFileName);
+  photosFile.setContent(JSON.stringify({ photoAssets: optimizedPhotos }));
+
+  var createdMetaFile = getOrCreateJsonFile(rootFolder, metaFileName);
+  createdMetaFile.setContent(JSON.stringify(emptyMeta));
+
+  return emptyMeta;
 }
 
 function savePhotosToDriveFolder(photoFolder, cleanPhotosFolder, photoAssets) {

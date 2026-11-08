@@ -294,7 +294,43 @@ export async function savePhotoAsset(asset: QuestionPhotoAsset): Promise<void> {
     throw new Error('Fotoğraf kaydı öğrenci, deneme ve soru kimliğine bağlı olmalıdır.');
   }
   const db = await getDb();
-  await db.put('photoAssets', asset);
+  const tx = db.transaction(['photoAssets', 'appSettings'], 'readwrite');
+  const updatedAsset: QuestionPhotoAsset = {
+    ...asset,
+    createdAt: new Date().toISOString(),
+  };
+  await tx.objectStore('photoAssets').put(updatedAsset);
+
+  const pendingEntry = await tx.objectStore('appSettings').get('pendingSyncPhotoIds');
+  const currentIds: string[] = Array.isArray(pendingEntry?.value) ? pendingEntry.value : [];
+  if (!currentIds.includes(asset.id)) {
+    currentIds.push(asset.id);
+  }
+  await tx.objectStore('appSettings').put({ key: 'pendingSyncPhotoIds', value: currentIds });
+  await tx.done;
+}
+
+export async function getLocalPhotoAssetIds(): Promise<string[]> {
+  const db = await getDb();
+  const keys = await db.getAllKeys('photoAssets');
+  return keys.map((k) => String(k));
+}
+
+export async function clearPendingSyncPhotoIds(syncedIds?: string[]): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction('appSettings', 'readwrite');
+  if (!syncedIds) {
+    await tx.store.put({ key: 'pendingSyncPhotoIds', value: [] });
+  } else {
+    const entry = await tx.store.get('pendingSyncPhotoIds');
+    const current: string[] = Array.isArray(entry?.value) ? entry.value : [];
+    const syncedSet = new Set(syncedIds);
+    await tx.store.put({
+      key: 'pendingSyncPhotoIds',
+      value: current.filter((id) => !syncedSet.has(id)),
+    });
+  }
+  await tx.done;
 }
 
 export async function getPhotoAssetById(photoId: string): Promise<QuestionPhotoAsset | undefined> {
@@ -617,24 +653,50 @@ export interface CloudSyncDataPayload {
 
 export async function getAllDataForSync(sinceIso?: string | null): Promise<CloudSyncDataPayload> {
   const db = await getDb();
-  const [students, exams, questions, photoAssets, studyPlans, deletions] = await Promise.all([
+
+  if (!sinceIso) {
+    const [students, exams, questions, photoAssets, studyPlans, deletions] = await Promise.all([
+      db.getAll('students'),
+      db.getAll('exams'),
+      db.getAll('questions'),
+      db.getAll('photoAssets'),
+      db.getAll('studyPlans'),
+      db.getAll('deletedEntities'),
+    ]);
+    return { students, exams, questions, photoAssets, studyPlans, deletions };
+  }
+
+  const [students, exams, questions, studyPlans, deletions, pendingEntry] = await Promise.all([
     db.getAll('students'),
     db.getAll('exams'),
     db.getAll('questions'),
-    db.getAll('photoAssets'),
     db.getAll('studyPlans'),
     db.getAll('deletedEntities'),
+    db.get('appSettings', 'pendingSyncPhotoIds'),
   ]);
 
-  if (!sinceIso) {
-    return { students, exams, questions, photoAssets, studyPlans, deletions };
+  let changedPhotos: QuestionPhotoAsset[] = [];
+  if (Array.isArray(pendingEntry?.value)) {
+    const pendingIds: string[] = pendingEntry.value;
+    if (pendingIds.length > 0) {
+      const fetched = await Promise.all(pendingIds.map((id) => db.get('photoAssets', id)));
+      changedPhotos = fetched.filter((p): p is QuestionPhotoAsset => Boolean(p));
+    }
+  } else {
+    // İlk kez çalışıyorsa bir defalık kontrol yap ve pendingSyncPhotoIds'i başlat
+    const allPhotos: QuestionPhotoAsset[] = await db.getAll('photoAssets');
+    changedPhotos = allPhotos.filter((p) => p.createdAt > sinceIso);
+    await db.put('appSettings', {
+      key: 'pendingSyncPhotoIds',
+      value: changedPhotos.map((p) => p.id),
+    });
   }
 
   return {
     students: students.filter((s) => (s.updatedAt || s.createdAt) > sinceIso),
     exams: exams.filter((e) => (e.updatedAt || e.createdAt) > sinceIso),
     questions: questions.filter((q) => (q.updatedAt || q.createdAt) > sinceIso),
-    photoAssets: photoAssets.filter((p) => p.createdAt > sinceIso),
+    photoAssets: changedPhotos,
     studyPlans: studyPlans.filter((sp) => sp.generatedAt > sinceIso),
     deletions: deletions.filter((d) => d.deletedAt > sinceIso),
   };
@@ -699,7 +761,12 @@ export async function mergeSyncPayload(remote: Partial<CloudSyncDataPayload>): P
   // 5. Merge photo assets
   for (const p of remote.photoAssets || []) {
     const existing: QuestionPhotoAsset | undefined = await tx.objectStore('photoAssets').get(p.id);
-    if (!existing) {
+    if (
+      !existing ||
+      (p.createdAt || '') > (existing.createdAt || '') ||
+      (existing.croppedDataUrl?.startsWith('data:image/png') &&
+        p.croppedDataUrl?.startsWith('data:image/jpeg'))
+    ) {
       await tx.objectStore('photoAssets').put(p);
       appliedPhotos++;
     }

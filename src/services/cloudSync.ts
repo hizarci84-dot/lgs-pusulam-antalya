@@ -17,12 +17,26 @@ import {
   getCloudSyncSettings,
   saveCloudSyncSettings,
   getAllDataForSync,
+  getLocalPhotoAssetIds,
+  clearPendingSyncPhotoIds,
   mergeSyncPayload,
   clearPendingDeletions,
   CloudSyncDataPayload,
 } from './db';
 
 let isSyncing = false;
+let hasQueuedSync = false;
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleBackgroundSync(delayMs = 500): void {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    syncWithCloud().catch(() => {});
+  }, delayMs);
+}
 
 // Event helper to notify React components across the app
 export function notifySyncStateChanged(settings: CloudSyncSettings) {
@@ -258,17 +272,33 @@ async function syncWithFirebase(settings: CloudSyncSettings): Promise<string> {
 
   // 5. Clean up pending deletions since they are committed to cloud
   await clearPendingDeletions();
+  await clearPendingSyncPhotoIds(localData.photoAssets.map((p) => p.id));
 
   return `Firebase ile eşitlendi (${mergeResult.appliedExams} deneme, ${mergeResult.appliedQuestions} soru, ${mergeResult.appliedPhotos} fotoğraf güncellendi).`;
 }
 
 // ==================== GOOGLE APPS SCRIPT SYNC IMPLEMENTATION ====================
-async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<string> {
+async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<{
+  message: string;
+  appliedTotal: number;
+}> {
   if (!settings.googleScriptUrl) {
     throw new Error('Google Apps Script URL girilmedi.');
   }
 
-  const localData = await getAllDataForSync(settings.lastSyncedAt);
+  const [localData, knownPhotoIds] = await Promise.all([
+    getAllDataForSync(settings.lastSyncedAt),
+    getLocalPhotoAssetIds(),
+  ]);
+
+  // Optimize outgoing photo assets so we don't upload duplicate multi-MB originalDataUrl when croppedDataUrl exists
+  const compactPhotoAssets = (localData.photoAssets || []).map((p) => ({
+    ...p,
+    originalDataUrl:
+      p.croppedDataUrl && p.originalDataUrl && p.originalDataUrl.length > 250000
+        ? p.croppedDataUrl
+        : p.originalDataUrl,
+  }));
 
   let res: Response;
   try {
@@ -280,7 +310,11 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<string
         familySyncId: settings.familySyncId,
         familySecretPin: settings.familySecretPin,
         lastSyncedAt: settings.lastSyncedAt,
-        localChanges: localData,
+        knownPhotoIds,
+        localChanges: {
+          ...localData,
+          photoAssets: compactPhotoAssets,
+        },
       }),
     });
   } catch (err: any) {
@@ -324,9 +358,22 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<string
   };
 
   const mergeResult = await mergeSyncPayload(remotePayload);
-  await clearPendingDeletions();
+  await Promise.all([
+    clearPendingDeletions(),
+    clearPendingSyncPhotoIds(compactPhotoAssets.map((p) => p.id)),
+  ]);
 
-  return `Google Drive / Apps Script ile eşitlendi (${mergeResult.appliedExams} deneme, ${mergeResult.appliedQuestions} soru güncellendi).`;
+  const appliedTotal =
+    mergeResult.appliedStudents +
+    mergeResult.appliedExams +
+    mergeResult.appliedQuestions +
+    mergeResult.appliedPhotos +
+    mergeResult.appliedDeletions;
+
+  return {
+    message: `Google Drive ile hızlı eşitlendi (${mergeResult.appliedExams} deneme, ${mergeResult.appliedQuestions} soru güncellendi).`,
+    appliedTotal,
+  };
 }
 
 // ==================== MAIN SYNC NOW FUNCTION ====================
@@ -335,7 +382,8 @@ export async function syncWithCloud(force: boolean = false): Promise<{
   message: string;
 }> {
   if (isSyncing) {
-    return { success: false, message: 'Eşitleme zaten devam ediyor...' };
+    hasQueuedSync = true;
+    return { success: true, message: 'Eşitleme sıraya alındı...' };
   }
 
   const settings = await getCloudSyncSettings();
@@ -360,10 +408,17 @@ export async function syncWithCloud(force: boolean = false): Promise<{
 
   try {
     let resultMessage = '';
+    let shouldNotifyWorkspaceReload = force;
+
     if (settings.provider === 'firebase') {
       resultMessage = await syncWithFirebase(settings);
+      shouldNotifyWorkspaceReload = true;
     } else if (settings.provider === 'google_script') {
-      resultMessage = await syncWithGoogleScript(settings);
+      const gsRes = await syncWithGoogleScript(settings);
+      resultMessage = gsRes.message;
+      if (gsRes.appliedTotal > 0) {
+        shouldNotifyWorkspaceReload = true;
+      }
     }
 
     const nowIso = new Date().toISOString();
@@ -374,7 +429,9 @@ export async function syncWithCloud(force: boolean = false): Promise<{
     });
 
     notifySyncStateChanged(updated);
-    notifyDataUpdated('cloud-sync-success');
+    if (shouldNotifyWorkspaceReload) {
+      notifyDataUpdated('cloud-sync-success');
+    }
 
     return { success: true, message: resultMessage };
   } catch (err: any) {
@@ -387,6 +444,10 @@ export async function syncWithCloud(force: boolean = false): Promise<{
     return { success: false, message: errorMsg };
   } finally {
     isSyncing = false;
+    if (hasQueuedSync) {
+      hasQueuedSync = false;
+      scheduleBackgroundSync(300);
+    }
   }
 }
 
