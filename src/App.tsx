@@ -143,10 +143,20 @@ export const App: React.FC = () => {
   };
 
   useEffect(() => {
-    const onOnline = () => setIsOnline(true);
+    const onOnline = () => {
+      setIsOnline(true);
+      scheduleBackgroundSync(300);
+    };
     const onOffline = () => setIsOnline(false);
+    const onVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        scheduleBackgroundSync(300);
+      }
+    };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
+    window.addEventListener('focus', onVisibilityOrFocus);
+    document.addEventListener('visibilitychange', onVisibilityOrFocus);
 
     const onSyncStatusChanged = (e: any) => {
       if (e.detail) setCloudSettings(e.detail);
@@ -156,6 +166,8 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener('online', onOnline);
       window.removeEventListener('offline', onOffline);
+      window.removeEventListener('focus', onVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', onVisibilityOrFocus);
       window.removeEventListener('lgs-sync-status-changed', onSyncStatusChanged);
     };
   }, []);
@@ -548,6 +560,24 @@ export const App: React.FC = () => {
                 </>
               )}
             </span>
+
+            {/* Quick 1-Click Sync Button */}
+            {cloudSettings.enabled && (
+              <button
+                type="button"
+                onClick={() => syncWithCloud(true)}
+                disabled={cloudSettings.lastSyncStatus === 'syncing'}
+                className="px-2.5 py-1.5 rounded-xl border border-turquoise-400/40 bg-turquoise-500/20 hover:bg-turquoise-500/30 text-turquoise-200 text-xs font-bold flex items-center gap-1.5 transition-all disabled:opacity-50"
+                title="Tek Tıkla Bulut İle Şimdi Eşitle"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    cloudSettings.lastSyncStatus === 'syncing' ? 'animate-spin' : ''
+                  }`}
+                />
+                <span>Şimdi Eşitle</span>
+              </button>
+            )}
 
             {/* Cloud Sync Status Badge */}
             <button

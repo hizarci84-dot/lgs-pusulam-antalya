@@ -156,9 +156,9 @@ function doPost(e) {
       // B) Yerel meta güncellemeleri (Last-Write-Wins) buluta kaydet
       for (var sIdx = 0; sIdx < localStudents.length; sIdx++) {
         var s = localStudents[sIdx];
-        if (!s || !s.id) continue;
+        if (!s || !s.id || metaData.deletions[s.id]) continue;
         var exS = metaData.students[s.id];
-        if (!exS || (s.updatedAt || s.createdAt || '') >= (exS.updatedAt || exS.createdAt || '')) {
+        if (!exS || (s.updatedAt || s.createdAt || '') > (exS.updatedAt || exS.createdAt || '')) {
           metaData.students[s.id] = s;
           hasMetaChanges = true;
         }
@@ -166,9 +166,9 @@ function doPost(e) {
 
       for (var eIdx = 0; eIdx < localExams.length; eIdx++) {
         var eItem = localExams[eIdx];
-        if (!eItem || !eItem.id) continue;
+        if (!eItem || !eItem.id || metaData.deletions[eItem.id]) continue;
         var exE = metaData.exams[eItem.id];
-        if (!exE || (eItem.updatedAt || eItem.createdAt || '') >= (exE.updatedAt || exE.createdAt || '')) {
+        if (!exE || (eItem.updatedAt || eItem.createdAt || '') > (exE.updatedAt || exE.createdAt || '')) {
           metaData.exams[eItem.id] = eItem;
           hasMetaChanges = true;
         }
@@ -176,9 +176,9 @@ function doPost(e) {
 
       for (var qIdx = 0; qIdx < localQuestions.length; qIdx++) {
         var q = localQuestions[qIdx];
-        if (!q || !q.id) continue;
+        if (!q || !q.id || metaData.deletions[q.id]) continue;
         var exQ = metaData.questions[q.id];
-        if (!exQ || (q.updatedAt || q.createdAt || '') >= (exQ.updatedAt || exQ.createdAt || '')) {
+        if (!exQ || (q.updatedAt || q.createdAt || '') > (exQ.updatedAt || exQ.createdAt || '')) {
           metaData.questions[q.id] = q;
           hasMetaChanges = true;
         }
@@ -186,9 +186,9 @@ function doPost(e) {
 
       for (var spIdx = 0; spIdx < localPlans.length; spIdx++) {
         var sp = localPlans[spIdx];
-        if (!sp || !sp.id) continue;
+        if (!sp || !sp.id || metaData.deletions[sp.id]) continue;
         var exSp = metaData.studyPlans[sp.id];
-        if (!exSp || (sp.generatedAt || '') >= (exSp.generatedAt || '')) {
+        if (!exSp || (sp.generatedAt || '') > (exSp.generatedAt || '')) {
           metaData.studyPlans[sp.id] = sp;
           hasMetaChanges = true;
         }
@@ -196,7 +196,7 @@ function doPost(e) {
 
       for (var pIdx = 0; pIdx < localPhotos.length; pIdx++) {
         var pItem = localPhotos[pIdx];
-        if (!pItem || !pItem.id) continue;
+        if (!pItem || !pItem.id || metaData.deletions[pItem.id]) continue;
         if (!metaData.photoIndex[pItem.id]) {
           newlyAddedPhotosForDrive.push(pItem);
         }
@@ -292,6 +292,7 @@ function doPost(e) {
       return responseJson({
         success: true,
         remoteChanges: remoteChanges,
+        cloudPhotoIds: allCloudPhotoIds,
         totalCloudPhotos: allCloudPhotoIds.length,
         syncedNewPhotos: remotePhotosToSend.length,
         creditStats: getVertexCreditStats(),

@@ -19,6 +19,7 @@ import {
   getAllDataForSync,
   getLocalPhotoAssetIds,
   clearPendingSyncPhotoIds,
+  queuePendingSyncPhotoIds,
   mergeSyncPayload,
   clearPendingDeletions,
   CloudSyncDataPayload,
@@ -363,6 +364,19 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<{
     clearPendingSyncPhotoIds(compactPhotoAssets.map((p) => p.id)),
   ]);
 
+  // Cihazda var olup bulutta henüz bulunmayan yerel fotoğraflar varsa otomatik kuyruğa ekle
+  if (Array.isArray(json.cloudPhotoIds)) {
+    const cloudSet = new Set<string>(json.cloudPhotoIds);
+    const deletedSet = new Set<string>((remotePayload.deletions || []).map((d) => d.id));
+    const localMissingInCloud = knownPhotoIds.filter(
+      (id) => !cloudSet.has(id) && !deletedSet.has(id)
+    );
+    if (localMissingInCloud.length > 0) {
+      await queuePendingSyncPhotoIds(localMissingInCloud);
+      hasQueuedSync = true;
+    }
+  }
+
   const appliedTotal =
     mergeResult.appliedStudents +
     mergeResult.appliedExams +
@@ -377,7 +391,7 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<{
 }
 
 // ==================== MAIN SYNC NOW FUNCTION ====================
-export async function syncWithCloud(force: boolean = false): Promise<{
+export async function syncWithCloud(_force: boolean = false): Promise<{
   success: boolean;
   message: string;
 }> {
@@ -408,17 +422,12 @@ export async function syncWithCloud(force: boolean = false): Promise<{
 
   try {
     let resultMessage = '';
-    let shouldNotifyWorkspaceReload = force;
 
     if (settings.provider === 'firebase') {
       resultMessage = await syncWithFirebase(settings);
-      shouldNotifyWorkspaceReload = true;
     } else if (settings.provider === 'google_script') {
       const gsRes = await syncWithGoogleScript(settings);
       resultMessage = gsRes.message;
-      if (gsRes.appliedTotal > 0) {
-        shouldNotifyWorkspaceReload = true;
-      }
     }
 
     const nowIso = new Date().toISOString();
@@ -429,9 +438,7 @@ export async function syncWithCloud(force: boolean = false): Promise<{
     });
 
     notifySyncStateChanged(updated);
-    if (shouldNotifyWorkspaceReload) {
-      notifyDataUpdated('cloud-sync-success');
-    }
+    notifyDataUpdated('cloud-sync-success');
 
     return { success: true, message: resultMessage };
   } catch (err: any) {

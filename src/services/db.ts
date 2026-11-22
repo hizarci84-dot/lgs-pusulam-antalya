@@ -102,7 +102,27 @@ export async function setActiveStudentId(studentId: string | null): Promise<void
 export async function getCloudSyncSettings(): Promise<CloudSyncSettings> {
   const db = await getDb();
   const entry = await db.get('appSettings', 'cloudSyncSettings');
-  return entry?.value ? { ...DEFAULT_CLOUD_SYNC_SETTINGS, ...entry.value } : DEFAULT_CLOUD_SYNC_SETTINGS;
+  if (!entry?.value) {
+    return DEFAULT_CLOUD_SYNC_SETTINGS;
+  }
+  const v = entry.value as Partial<CloudSyncSettings>;
+  return {
+    ...DEFAULT_CLOUD_SYNC_SETTINGS,
+    ...v,
+    enabled: v.enabled ?? DEFAULT_CLOUD_SYNC_SETTINGS.enabled,
+    provider:
+      !v.provider || v.provider === 'none'
+        ? DEFAULT_CLOUD_SYNC_SETTINGS.provider
+        : v.provider,
+    familySyncId:
+      v.familySyncId && v.familySyncId.trim().length > 0
+        ? v.familySyncId.trim()
+        : DEFAULT_CLOUD_SYNC_SETTINGS.familySyncId,
+    googleScriptUrl:
+      v.googleScriptUrl && v.googleScriptUrl.trim().startsWith('https://script.google.com')
+        ? v.googleScriptUrl.trim()
+        : DEFAULT_CLOUD_SYNC_SETTINGS.googleScriptUrl,
+  };
 }
 
 export async function saveCloudSyncSettings(settings: Partial<CloudSyncSettings>): Promise<CloudSyncSettings> {
@@ -215,7 +235,22 @@ export async function deleteStudentAndAllData(studentId: string): Promise<void> 
 // ==================== EXAMS ====================
 export async function getExamsByStudent(studentId: string): Promise<ExamRecord[]> {
   const db = await getDb();
-  const list: ExamRecord[] = await db.getAllFromIndex('exams', 'by-student', studentId);
+  const [allExams, allStudents] = await Promise.all([
+    db.getAll('exams'),
+    db.getAll('students'),
+  ]);
+  const otherDistinctStudentIds = new Set(
+    allStudents
+      .filter(
+        (s) =>
+          s.id !== studentId &&
+          (s.nickname || '').trim().toLowerCase() !== 'atakan'
+      )
+      .map((s) => s.id)
+  );
+  const list: ExamRecord[] = allExams.filter(
+    (e) => e.studentId === studentId || !otherDistinctStudentIds.has(e.studentId)
+  );
   return list.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -254,7 +289,22 @@ export async function deleteExamRecord(examId: string): Promise<void> {
 // ==================== QUESTIONS & PHOTOS ====================
 export async function getQuestionsByStudent(studentId: string): Promise<QuestionRecord[]> {
   const db = await getDb();
-  const list: QuestionRecord[] = await db.getAllFromIndex('questions', 'by-student', studentId);
+  const [allQuestions, allStudents] = await Promise.all([
+    db.getAll('questions'),
+    db.getAll('students'),
+  ]);
+  const otherDistinctStudentIds = new Set(
+    allStudents
+      .filter(
+        (s) =>
+          s.id !== studentId &&
+          (s.nickname || '').trim().toLowerCase() !== 'atakan'
+      )
+      .map((s) => s.id)
+  );
+  const list: QuestionRecord[] = allQuestions.filter(
+    (q) => q.studentId === studentId || !otherDistinctStudentIds.has(q.studentId)
+  );
   return list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
@@ -333,6 +383,17 @@ export async function clearPendingSyncPhotoIds(syncedIds?: string[]): Promise<vo
   await tx.done;
 }
 
+export async function queuePendingSyncPhotoIds(photoIds: string[]): Promise<void> {
+  if (!photoIds || photoIds.length === 0) return;
+  const db = await getDb();
+  const tx = db.transaction('appSettings', 'readwrite');
+  const entry = await tx.store.get('pendingSyncPhotoIds');
+  const current: string[] = Array.isArray(entry?.value) ? entry.value : [];
+  const merged = Array.from(new Set([...current, ...photoIds]));
+  await tx.store.put({ key: 'pendingSyncPhotoIds', value: merged });
+  await tx.done;
+}
+
 export async function getPhotoAssetById(photoId: string): Promise<QuestionPhotoAsset | undefined> {
   const db = await getDb();
   return db.get('photoAssets', photoId);
@@ -340,7 +401,22 @@ export async function getPhotoAssetById(photoId: string): Promise<QuestionPhotoA
 
 export async function getPhotoAssetsByStudent(studentId: string): Promise<QuestionPhotoAsset[]> {
   const db = await getDb();
-  return db.getAllFromIndex('photoAssets', 'by-student', studentId);
+  const [allPhotos, allStudents] = await Promise.all([
+    db.getAll('photoAssets'),
+    db.getAll('students'),
+  ]);
+  const otherDistinctStudentIds = new Set(
+    allStudents
+      .filter(
+        (s) =>
+          s.id !== studentId &&
+          (s.nickname || '').trim().toLowerCase() !== 'atakan'
+      )
+      .map((s) => s.id)
+  );
+  return allPhotos.filter(
+    (p) => p.studentId === studentId || !otherDistinctStudentIds.has(p.studentId)
+  );
 }
 
 export async function getPhotoAssetsByQuestion(questionId: string): Promise<QuestionPhotoAsset[]> {
@@ -692,13 +768,16 @@ export async function getAllDataForSync(sinceIso?: string | null): Promise<Cloud
     });
   }
 
+  // Deneme, soru, öğrenci ve çalışma planı meta verileri toplamda ~60KB olduğu için
+  // lastSyncedAt yarış durumu (race condition) nedeniyle hiçbir denemenin/sorunun
+  // cihazda sıkışıp kalmaması adına her eşitlemede eksiksiz gönderilir; yalnızca fotoğraflar delta gönderilir.
   return {
-    students: students.filter((s) => (s.updatedAt || s.createdAt) > sinceIso),
-    exams: exams.filter((e) => (e.updatedAt || e.createdAt) > sinceIso),
-    questions: questions.filter((q) => (q.updatedAt || q.createdAt) > sinceIso),
+    students,
+    exams,
+    questions,
     photoAssets: changedPhotos,
-    studyPlans: studyPlans.filter((sp) => sp.generatedAt > sinceIso),
-    deletions: deletions.filter((d) => d.deletedAt > sinceIso),
+    studyPlans,
+    deletions,
   };
 }
 
