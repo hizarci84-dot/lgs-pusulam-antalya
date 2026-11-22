@@ -359,10 +359,13 @@ async function syncWithGoogleScript(settings: CloudSyncSettings): Promise<{
   };
 
   const mergeResult = await mergeSyncPayload(remotePayload);
-  await Promise.all([
+  const [, remainingPendingPhotos] = await Promise.all([
     clearPendingDeletions(),
     clearPendingSyncPhotoIds(compactPhotoAssets.map((p) => p.id)),
   ]);
+  if (remainingPendingPhotos > 0) {
+    hasQueuedSync = true;
+  }
 
   // Cihazda var olup bulutta henüz bulunmayan yerel fotoğraflar varsa otomatik kuyruğa ekle
   if (Array.isArray(json.cloudPhotoIds)) {

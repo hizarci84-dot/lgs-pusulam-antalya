@@ -106,22 +106,17 @@ export async function getCloudSyncSettings(): Promise<CloudSyncSettings> {
     return DEFAULT_CLOUD_SYNC_SETTINGS;
   }
   const v = entry.value as Partial<CloudSyncSettings>;
+  const hasValidFirebase = Boolean(v.firebaseConfig?.projectId && v.firebaseConfig?.apiKey);
   return {
     ...DEFAULT_CLOUD_SYNC_SETTINGS,
     ...v,
-    enabled: v.enabled ?? DEFAULT_CLOUD_SYNC_SETTINGS.enabled,
+    enabled: v.enabled ?? true,
     provider:
-      !v.provider || v.provider === 'none'
-        ? DEFAULT_CLOUD_SYNC_SETTINGS.provider
-        : v.provider,
-    familySyncId:
-      v.familySyncId && v.familySyncId.trim().length > 0
-        ? v.familySyncId.trim()
-        : DEFAULT_CLOUD_SYNC_SETTINGS.familySyncId,
-    googleScriptUrl:
-      v.googleScriptUrl && v.googleScriptUrl.trim().startsWith('https://script.google.com')
-        ? v.googleScriptUrl.trim()
-        : DEFAULT_CLOUD_SYNC_SETTINGS.googleScriptUrl,
+      v.provider === 'firebase' && hasValidFirebase
+        ? 'firebase'
+        : DEFAULT_CLOUD_SYNC_SETTINGS.provider,
+    familySyncId: DEFAULT_CLOUD_SYNC_SETTINGS.familySyncId,
+    googleScriptUrl: DEFAULT_CLOUD_SYNC_SETTINGS.googleScriptUrl,
   };
 }
 
@@ -366,21 +361,25 @@ export async function getLocalPhotoAssetIds(): Promise<string[]> {
   return keys.map((k) => String(k));
 }
 
-export async function clearPendingSyncPhotoIds(syncedIds?: string[]): Promise<void> {
+export async function clearPendingSyncPhotoIds(syncedIds?: string[]): Promise<number> {
   const db = await getDb();
   const tx = db.transaction('appSettings', 'readwrite');
+  let remainingCount = 0;
   if (!syncedIds) {
     await tx.store.put({ key: 'pendingSyncPhotoIds', value: [] });
   } else {
     const entry = await tx.store.get('pendingSyncPhotoIds');
     const current: string[] = Array.isArray(entry?.value) ? entry.value : [];
     const syncedSet = new Set(syncedIds);
+    const remaining = current.filter((id) => !syncedSet.has(id));
+    remainingCount = remaining.length;
     await tx.store.put({
       key: 'pendingSyncPhotoIds',
-      value: current.filter((id) => !syncedSet.has(id)),
+      value: remaining,
     });
   }
   await tx.done;
+  return remainingCount;
 }
 
 export async function queuePendingSyncPhotoIds(photoIds: string[]): Promise<void> {
@@ -727,20 +726,8 @@ export interface CloudSyncDataPayload {
   deletions: DeletedEntityRecord[];
 }
 
-export async function getAllDataForSync(sinceIso?: string | null): Promise<CloudSyncDataPayload> {
+export async function getAllDataForSync(_sinceIso?: string | null): Promise<CloudSyncDataPayload> {
   const db = await getDb();
-
-  if (!sinceIso) {
-    const [students, exams, questions, photoAssets, studyPlans, deletions] = await Promise.all([
-      db.getAll('students'),
-      db.getAll('exams'),
-      db.getAll('questions'),
-      db.getAll('photoAssets'),
-      db.getAll('studyPlans'),
-      db.getAll('deletedEntities'),
-    ]);
-    return { students, exams, questions, photoAssets, studyPlans, deletions };
-  }
 
   const [students, exams, questions, studyPlans, deletions, pendingEntry] = await Promise.all([
     db.getAll('students'),
@@ -753,24 +740,21 @@ export async function getAllDataForSync(sinceIso?: string | null): Promise<Cloud
 
   let changedPhotos: QuestionPhotoAsset[] = [];
   if (Array.isArray(pendingEntry?.value)) {
-    const pendingIds: string[] = pendingEntry.value;
+    // Tek seferde 40MB+ yükleme tıkanmasını önlemek için her istekte en fazla 2 yeni fotoğraf gönderilir
+    const pendingIds: string[] = pendingEntry.value.slice(0, 2);
     if (pendingIds.length > 0) {
       const fetched = await Promise.all(pendingIds.map((id) => db.get('photoAssets', id)));
       changedPhotos = fetched.filter((p): p is QuestionPhotoAsset => Boolean(p));
     }
   } else {
-    // İlk kez çalışıyorsa bir defalık kontrol yap ve pendingSyncPhotoIds'i başlat
-    const allPhotos: QuestionPhotoAsset[] = await db.getAll('photoAssets');
-    changedPhotos = allPhotos.filter((p) => p.createdAt > sinceIso);
+    // İlk eşitlemede önce tüm deneme/soru meta verilerini (~60KB) anında gönder;
+    // bulutta eksik olan fotoğraflar sunucunun döndürdüğü cloudPhotoIds listesiyle otomatik kuyruğa alınır.
     await db.put('appSettings', {
       key: 'pendingSyncPhotoIds',
-      value: changedPhotos.map((p) => p.id),
+      value: [],
     });
   }
 
-  // Deneme, soru, öğrenci ve çalışma planı meta verileri toplamda ~60KB olduğu için
-  // lastSyncedAt yarış durumu (race condition) nedeniyle hiçbir denemenin/sorunun
-  // cihazda sıkışıp kalmaması adına her eşitlemede eksiksiz gönderilir; yalnızca fotoğraflar delta gönderilir.
   return {
     students,
     exams,
