@@ -124,7 +124,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
   // Live in-app camera state
   const [isLiveCameraOpen, setIsLiveCameraOpen] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [frameSize, setFrameSize] = useState<'compact' | 'standard' | 'wide'>('compact');
+  const [frameSize, setFrameSize] = useState<'compact' | 'standard' | 'wide'>('wide');
   const [capturedPreview, setCapturedPreview] = useState<{
     dataUrl: string;
     cleanDataUrl?: string;
@@ -515,6 +515,18 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         srcH = Math.max(20, Math.min(video.videoHeight - srcY, srcH));
       }
 
+      // Also capture full uncropped video frame so manual "Kırpmayı Ayarla" always has the complete image
+      const fullCanvas = document.createElement('canvas');
+      fullCanvas.width = video.videoWidth;
+      fullCanvas.height = video.videoHeight;
+      const fullCtx = fullCanvas.getContext('2d');
+      if (fullCtx) {
+        fullCtx.drawImage(video, 0, 0, fullCanvas.width, fullCanvas.height);
+      }
+      const fullFrameDataUrl = fullCtx
+        ? fullCanvas.toDataURL('image/jpeg', 0.88)
+        : '';
+
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(srcW);
       canvas.height = Math.round(srcH);
@@ -524,6 +536,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       // Draw area inside visual question frame
       ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
       const rawDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+      const baseOriginalUrl = fullFrameDataUrl || rawDataUrl;
 
       let finalDataUrl = rawDataUrl;
       let croppedRawDataUrl = rawDataUrl;
@@ -539,11 +552,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       let overlapWarn = false;
       let overlapMsg = '';
 
-      // Run End-to-End AI Auto-Crop & Pencil Cleaner if key is configured
+      // Run End-to-End AI Pencil Cleaner & Topic Detector without double-cropping the already framed camera shot
       if (autoAiDetect && getStoredGeminiApiKey()) {
         setIsAiProcessing(true);
         try {
-          const aiRes = await processQuestionPhotoWithAi(rawDataUrl, batchSubjectId);
+          const aiRes = await processQuestionPhotoWithAi(rawDataUrl, batchSubjectId, {
+            skipBoxCrop: true,
+            fullOriginalDataUrl: baseOriginalUrl,
+          });
           if (aiRes.success && aiRes.cleanDataUrl) {
             finalDataUrl = aiRes.cleanDataUrl;
             croppedRawDataUrl = aiRes.rawDataUrl || rawDataUrl;
@@ -575,7 +591,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
         dataUrl: hasCleanOutput ? finalDataUrl : croppedRawDataUrl,
         cleanDataUrl: hasCleanOutput ? finalDataUrl : undefined,
         rawOriginalDataUrl: croppedRawDataUrl,
-        originalUploadedUrl: rawDataUrl,
+        originalUploadedUrl: baseOriginalUrl,
         isCleaned: hasCleanOutput,
         cleanupStatus,
         statusMessage,
@@ -981,7 +997,42 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       setErrorMsg('Lütfen fotoğrafların bağlanacağı deneme sınavını seçin.');
       return;
     }
-    if (stagedItems.length === 0) {
+
+    const itemsToSave: StagedQuestionItem[] = [...stagedItems];
+    if (capturedPreview) {
+      const finalSubj = capturedPreview.subjectId || batchSubjectId;
+      itemsToSave.push({
+        tempId: `stg-preview-${Date.now()}`,
+        dataUrl: capturedPreview.dataUrl,
+        cleanDataUrl:
+          capturedPreview.cleanDataUrl ||
+          (capturedPreview.isCleaned ? capturedPreview.dataUrl : undefined),
+        rawOriginalDataUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
+        originalUploadedUrl:
+          capturedPreview.originalUploadedUrl ||
+          capturedPreview.rawOriginalDataUrl ||
+          capturedPreview.dataUrl,
+        isCleaned: Boolean(capturedPreview.isCleaned),
+        cleanupStatus: capturedPreview.cleanupStatus,
+        statusMessage: capturedPreview.statusMessage,
+        cleanedMarkCount: capturedPreview.cleanedMarkCount,
+        preservedRiskMarkCount: capturedPreview.preservedRiskMarkCount,
+        overlapWarning: capturedPreview.overlapWarning,
+        overlapMessage: capturedPreview.overlapMessage,
+        mimeType: 'image/jpeg',
+        width: capturedPreview.width,
+        height: capturedPreview.height,
+        subjectId: finalSubj,
+        status: batchStatus,
+        questionNumber: '',
+        topicId: capturedPreview.topicId || '',
+        subtopicName: capturedPreview.subtopicName || '',
+        errorReason: '',
+        studentNote: '',
+      });
+    }
+
+    if (itemsToSave.length === 0) {
       setErrorMsg('Lütfen en az bir soru fotoğrafı seçin veya kameradan çekin.');
       return;
     }
@@ -994,7 +1045,7 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
       const newQuestions: QuestionRecord[] = [];
       const newAssets: QuestionPhotoAsset[] = [];
 
-      for (const item of stagedItems) {
+      for (const item of itemsToSave) {
         const qId = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const pId = `photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -1301,6 +1352,28 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                         )}
                       </div>
 
+                      {/* Primary Save & Add Buttons at Top of Preview Controls */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full pt-1">
+                        <button
+                          type="button"
+                          onClick={() => confirmAndAddPreview(false)}
+                          className="w-full px-4 py-2.5 bg-turquoise-500 hover:bg-turquoise-400 text-navy-950 text-xs font-extrabold rounded-xl flex items-center justify-center gap-1.5 shadow-lg transition"
+                        >
+                          <Check className="w-4 h-4" />
+                          ✓ Bu Soruyu Listeye Ekle
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => confirmAndAddPreview(true)}
+                          className="w-full px-3.5 py-2.5 bg-navy-800 hover:bg-navy-700 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 border border-turquoise-400/50 shadow-md transition"
+                          title="Bu soruyu listeye ekler ve bir sonraki soru için kamerayı açık tutar"
+                        >
+                          <Plus className="w-4 h-4 text-turquoise-400" />
+                          + Ekle & Sıradaki Soruyu Çek
+                        </button>
+                      </div>
+
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-1 w-full">
                         <button
                           type="button"
@@ -1356,11 +1429,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                           onClick={() => {
                             setCroppingTarget({
                               type: 'preview',
-                              imageUrl: capturedPreview.rawOriginalDataUrl || capturedPreview.dataUrl,
+                              imageUrl:
+                                capturedPreview.originalUploadedUrl ||
+                                capturedPreview.rawOriginalDataUrl ||
+                                capturedPreview.dataUrl,
                             });
                           }}
                           className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-slate-600 transition"
-                          title="Sorunun sınırlarını manuel olarak ayarlayın"
+                          title="Orijinal tam fotoğraf üzerinden sorunun sınırlarını manuel olarak ayarlayın"
                         >
                           <Crop className="w-3.5 h-3.5 text-turquoise-400" />
                           <span>✂️ Kırpmayı Ayarla</span>
@@ -1715,11 +1791,14 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
                               setCroppingTarget({
                                 type: 'staged',
                                 tempId: item.tempId,
-                                imageUrl: item.rawOriginalDataUrl || item.dataUrl,
+                                imageUrl:
+                                  item.originalUploadedUrl ||
+                                  item.rawOriginalDataUrl ||
+                                  item.dataUrl,
                               });
                             }}
                             className="mt-1 w-full text-[10px] font-semibold flex items-center justify-center gap-1 px-2 py-0.5 rounded border border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700 transition"
-                            title="Sorunun sınırlarını manuel olarak ayarlayın"
+                            title="Orijinal tam fotoğraf üzerinden sorunun sınırlarını manuel olarak ayarlayın"
                           >
                             <Crop className="w-3 h-3 text-turquoise-600" />
                             <span>✂️ Kırpmayı Ayarla</span>
@@ -1989,14 +2068,19 @@ export const QuickPhotoUploadModal: React.FC<QuickPhotoUploadModalProps> = ({
           {exams.length > 0 && (
             <button
               type="button"
-              disabled={isSaving || stagedItems.length === 0}
+              disabled={
+                isSaving ||
+                isAiProcessing ||
+                isLoadingFiles ||
+                stagedItems.length + (capturedPreview ? 1 : 0) === 0
+              }
               onClick={handleSaveAll}
               className="px-4 py-2 text-xs font-bold text-white bg-navy-900 hover:bg-navy-800 disabled:opacity-50 rounded-xl flex items-center gap-1.5 shadow-sm"
             >
               <Check className="w-4 h-4 text-turquoise-400" />
               {isSaving
                 ? 'Kaydediliyor...'
-                : `${stagedItems.length} Soru Fotoğrafını Kaydet`}
+                : `${stagedItems.length + (capturedPreview ? 1 : 0)} Soru Fotoğrafını Kaydet`}
             </button>
           )}
         </div>

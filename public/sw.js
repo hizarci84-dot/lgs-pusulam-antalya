@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lgs-pusulam-antalya-v3';
+const CACHE_NAME = 'lgs-pusulam-antalya-v4';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',

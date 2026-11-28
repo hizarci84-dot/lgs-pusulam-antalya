@@ -783,7 +783,7 @@ export const CHATGPT_CLEANUP_PROMPT_TR =
   'Bu soruda öğrenci tarafından karalanan kısımları kaldırıp sorunun temiz halini karşıma getirebilir misin';
 
 export const AI_IMAGE_CLEANUP_SYSTEM_PROMPT =
-  'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. Produce a clean, straightened, scan-like test page.';
+  'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. CRITICAL: Preserve the EXACT aspect ratio, full horizontal width, and full vertical height of the uploaded image — do NOT crop, zoom in, or cut off any borders, question numbers, text, or choices on the left, right, top, or bottom edges.';
 
 let lastImageGenerationError = '';
 
@@ -1220,17 +1220,19 @@ export interface AiAutoCleanAndCropResult {
  */
 export async function processQuestionPhotoWithAi(
   photoDataUrl: string,
-  subjectHint?: SubjectId
+  subjectHint?: SubjectId,
+  options?: { skipBoxCrop?: boolean; fullOriginalDataUrl?: string }
 ): Promise<AiAutoCleanAndCropResult> {
   const geminiKey = getStoredGeminiApiKey();
   const model = getStoredGeminiModel();
+  const baseOriginalUrl = options?.fullOriginalDataUrl || photoDataUrl;
 
   if (!geminiKey || !geminiKey.trim()) {
     return {
       success: false,
       cleanDataUrl: photoDataUrl,
       rawDataUrl: photoDataUrl,
-      originalUploadedUrl: photoDataUrl,
+      originalUploadedUrl: baseOriginalUrl,
       cleanupStatus: 'unchanged',
       statusMessage: 'Gemini API anahtarı bulunamadı.',
       errorMessage: 'Gemini API anahtarı bulunamadı.',
@@ -1373,34 +1375,57 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       };
     }
 
-    // Ensure question_box_2d encompasses any circle/underline marks on the question text with a clean margin
-    const qBoxRaw: [number, number, number, number] =
-      Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4
+    // Ensure question_box_2d encompasses any circle/underline marks on the question text with a generous margin
+    const rotNeeded = Number(parsed.rotation_needed) || 0;
+    const isSideways = rotNeeded === 90 || rotNeeded === 270;
+    const padY = isSideways ? 45 : 25;
+    const padX = isSideways ? 45 : 28;
+
+    let qBoxRaw: [number, number, number, number] =
+      options?.skipBoxCrop
+        ? [0, 0, 1000, 1000]
+        : Array.isArray(parsed.question_box_2d) && parsed.question_box_2d.length === 4
         ? [
-            Math.max(0, Number(parsed.question_box_2d[0]) - 10),
-            Math.max(0, Number(parsed.question_box_2d[1]) - 15),
-            Math.min(1000, Number(parsed.question_box_2d[2]) + 10),
-            Math.min(1000, Number(parsed.question_box_2d[3]) + 20),
+            Math.max(0, Number(parsed.question_box_2d[0]) - padY),
+            Math.max(0, Number(parsed.question_box_2d[1]) - padX),
+            Math.min(1000, Number(parsed.question_box_2d[2]) + padY),
+            Math.min(1000, Number(parsed.question_box_2d[3]) + padX),
           ]
         : [0, 0, 1000, 1000];
 
-    if (Array.isArray(parsed.handwritten_marks)) {
-      let maxTextMarkY = 0;
-      let hasLowMarginScribble = false;
+    if (!options?.skipBoxCrop && Array.isArray(parsed.handwritten_marks)) {
       for (const hm of parsed.handwritten_marks) {
         if (hm && Array.isArray(hm.box_2d) && hm.box_2d.length === 4) {
           if (hm.type === 'underline' || hm.type === 'circle') {
-            qBoxRaw[0] = Math.min(qBoxRaw[0], Math.max(0, Number(hm.box_2d[0]) - 15));
-            qBoxRaw[1] = Math.min(qBoxRaw[1], Math.max(0, Number(hm.box_2d[1]) - 15));
-            qBoxRaw[3] = Math.max(qBoxRaw[3], Math.min(1000, Number(hm.box_2d[3]) + 20));
-            maxTextMarkY = Math.max(maxTextMarkY, Number(hm.box_2d[2]));
-          } else if (hm.type === 'safe' && Number(hm.box_2d[0]) > 710 && Number(hm.box_2d[2]) > 820) {
-            hasLowMarginScribble = true;
+            qBoxRaw[0] = Math.min(qBoxRaw[0], Math.max(0, Number(hm.box_2d[0]) - 20));
+            qBoxRaw[1] = Math.min(qBoxRaw[1], Math.max(0, Number(hm.box_2d[1]) - 20));
+            qBoxRaw[2] = Math.max(qBoxRaw[2], Math.min(1000, Number(hm.box_2d[2]) + 20));
+            qBoxRaw[3] = Math.max(qBoxRaw[3], Math.min(1000, Number(hm.box_2d[3]) + 25));
           }
         }
       }
-      if (hasLowMarginScribble && maxTextMarkY > 0 && maxTextMarkY < 700 && qBoxRaw[2] > 820) {
-        qBoxRaw[2] = 760;
+    }
+
+    // Yatay/yan çekilmiş fotoğraflarda model sadece şekli kutuladıysa veya eksenleri daralttıysa aşırı kırpmayı önle
+    if (!options?.skipBoxCrop) {
+      const boxH = qBoxRaw[2] - qBoxRaw[0];
+      const boxW = qBoxRaw[3] - qBoxRaw[1];
+      if (boxH < 260 || boxW < 320) {
+        qBoxRaw = [
+          Math.max(0, qBoxRaw[0] - 80),
+          Math.max(0, qBoxRaw[1] - 80),
+          Math.min(1000, qBoxRaw[2] + 80),
+          Math.min(1000, qBoxRaw[3] + 80),
+        ];
+      }
+      if (isSideways) {
+        // Yan (90/270) fotoğraflarda X/Y eksen karışıklığı nedeniyle şıkların kesilmemesi için kutuyu güvenli genişlet
+        qBoxRaw = [
+          Math.max(0, Math.min(qBoxRaw[0], qBoxRaw[1]) - 20),
+          Math.max(0, Math.min(qBoxRaw[1], qBoxRaw[0]) - 20),
+          Math.min(1000, Math.max(qBoxRaw[2], qBoxRaw[3]) + 20),
+          Math.min(1000, Math.max(qBoxRaw[3], qBoxRaw[2]) + 20),
+        ];
       }
     }
     parsed.question_box_2d = qBoxRaw;
@@ -1490,7 +1515,7 @@ Yanıtını YALNIZCA aşağıdaki JSON formatında ver:
       success: true,
       cleanDataUrl,
       rawDataUrl: croppedRawDataUrl,
-      originalUploadedUrl: photoDataUrl,
+      originalUploadedUrl: baseOriginalUrl,
       cleanupStatus,
       statusMessage,
       cleanedMarkCount,

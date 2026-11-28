@@ -37,7 +37,7 @@ var WARN_REMAINING_DAYS = 7;         // 7 gün kaldığında uyar
 var HARD_STOP_REMAINING_DAYS = 2;    // 2 gün kaldığında otomatik durdur
 
 var VERTEX_CLEANUP_PROMPT =
-  'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. Produce a clean, straightened, scan-like test page.';
+  'Edit the uploaded photo of this Turkish 8th grade LGS test question. Remove all student pencil/pen scribbles, calculations, circles around options, underlines, and stray handwriting marks from the page, reconstructing the clean original printed question beneath them. Keep all printed question text, Turkish characters, diagrams, tables, formulas, and A, B, C, D choices intact and legible. CRITICAL: Preserve the EXACT aspect ratio, full horizontal width, and full vertical height of the uploaded image — do NOT crop, zoom in, or cut off any borders, question numbers, text, or choices on the left, right, top, or bottom edges.';
 
 function doPost(e) {
   try {
